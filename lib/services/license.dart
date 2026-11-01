@@ -131,6 +131,15 @@ class LicenseService {
         serverClientId: kGoogleServerClientId.isEmpty ? null : kGoogleServerClientId);
   }
 
+  /// يتحقق أن من يسجّل الآن هو نفس صاحب الترخيص (لاستعادة PIN المنسي). يحتاج اتصالاً.
+  Future<bool> confirmOwner() async {
+    final lic = await current();
+    if (lic == null) return false;
+    await _ensureGoogleInit();
+    final account = await GoogleSignIn.instance.authenticate();
+    return account.email.toLowerCase() == lic.email;
+  }
+
   /// تسجيل الدخول بـ Google ثم التفعيل/نقل الترخيص إلى هذا الجهاز تلقائياً.
   Future<LocalLicense> activate() async {
     if (!firebaseReady) {
