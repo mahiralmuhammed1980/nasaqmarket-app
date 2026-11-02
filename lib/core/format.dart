@@ -6,10 +6,11 @@ final _numFmt = NumberFormat('#,##0', 'en');
 String money(int v) => '${_numFmt.format(v)} ل.س';
 String numFmt(int v) => _numFmt.format(v);
 
+String _2(int n) => n.toString().padLeft(2, '0');
+
 String dateFmt(DateTime? d) =>
-    d == null ? '—' : DateFormat('yyyy-MM-dd', 'en').format(d);
-String dateTimeFmt(DateTime d) =>
-    DateFormat('yyyy-MM-dd HH:mm', 'en').format(d);
+    d == null ? '—' : '${d.year.toString().padLeft(4, '0')}-${_2(d.month)}-${_2(d.day)}';
+String dateTimeFmt(DateTime d) => '${dateFmt(d)} ${_2(d.hour)}:${_2(d.minute)}';
 
 /// يحوّل الأرقام العربية/الفارسية إلى لاتينية.
 String normalizeDigits(String s) {

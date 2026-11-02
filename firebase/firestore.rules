@@ -1,0 +1,58 @@
+rules_version = '2';
+// قواعد Firestore لـ «نسق فارما»
+//
+// الاستخدام:
+//  - allowed/{email}   : أنت تضيفه يدوياً من لوحة Firebase (الحقول غير مهمة، المهم وجود المستند).
+//                        معرّف المستند = البريد بأحرف صغيرة.
+//  - licenses/{email}  : ينشئه التطبيق تلقائياً عند التفعيل، وينقله تلقائياً عند تغيير الجهاز.
+//
+// حد النقل: 3 مرات كل 30 يوماً (يطابق منطق decideActivation في lib/services/license.dart).
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null && request.auth.token.email_verified == true;
+    }
+    function mail() { return request.auth.token.email.lower(); }
+    function isAllowed(e) {
+      return exists(/databases/$(database)/documents/allowed/$(e));
+    }
+
+    match /allowed/{e} {
+      allow read, write: if false;
+    }
+
+    match /licenses/{e} {
+      allow get: if signedIn() && e == mail();
+
+      // إنشاء أول ترخيص
+      allow create: if signedIn() && e == mail() && isAllowed(e)
+        && request.resource.data.keys().hasOnly(['deviceId', 'activatedAt', 'windowStart', 'transferCount'])
+        && request.resource.data.deviceId is string
+        && request.resource.data.transferCount == 0
+        && request.resource.data.activatedAt == request.time
+        && request.resource.data.windowStart == request.time;
+
+      // نقل الترخيص لجهاز جديد (تلقائي)
+      allow update: if signedIn() && e == mail() && isAllowed(e)
+        && request.resource.data.keys().hasOnly(['deviceId', 'activatedAt', 'windowStart', 'transferCount'])
+        && request.resource.data.deviceId is string
+        && request.resource.data.deviceId != resource.data.deviceId
+        && request.resource.data.activatedAt == request.time
+        && (
+          // داخل النافذة وتحت الحد
+          ( request.time < resource.data.windowStart + duration.value(30, 'd')
+            && resource.data.transferCount < 3
+            && request.resource.data.transferCount == resource.data.transferCount + 1
+            && request.resource.data.windowStart == resource.data.windowStart )
+          ||
+          // انتهت النافذة: نبدأ نافذة جديدة
+          ( request.time >= resource.data.windowStart + duration.value(30, 'd')
+            && request.resource.data.transferCount == 1
+            && request.resource.data.windowStart == request.time )
+        );
+
+      allow delete, list: if false;
+    }
+  }
+}
