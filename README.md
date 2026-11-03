@@ -44,6 +44,16 @@ keytool -list -v -keystore release.jks -alias nasaq   # لنسخ SHA-1 إلى Fi
 | `GOOGLE_SERVER_CLIENT_ID` | Web client ID من الخطوة 1.6 |
 | `LICENSE_SECRET` | نص عشوائي طويل لتوقيع الرخصة المحلية |
 
+### 6) صفحة التطبيق وسياسة الخصوصية (لشاشة موافقة Google)
+الملفات في `firebase/public/` (`index.html` و`privacy.html`). قبل النشر استبدل `CONTACT_EMAIL` في `privacy.html` ببريد الدعم. ثم:
+```bash
+npm install -g firebase-tools
+firebase login
+cd firebase
+firebase deploy --only hosting --project <معرّف مشروعك>
+```
+تصبح الصفحتان على `https://<معرّف مشروعك>.firebaseapp.com` و`/privacy.html`، فتستخدمهما في *OAuth consent screen ← Branding*.
+
 ## إصدار نسخة وتحديث الزبائن
 1. ارفع `version` في `pubspec.yaml` (مثال `1.0.1+2`؛ الرقم بعد `+` يجب أن يزيد دائماً).
 2. من GitHub: *Actions → Release APK → Run workflow* (أو ادفع وسماً `v1.0.1-2`).
