@@ -86,6 +86,10 @@ class _NewInvoicePageState extends State<NewInvoicePage> {
   final discount = TextEditingController(text: '0');
   final paid = TextEditingController();
   final notes = TextEditingController();
+  final rxNo = TextEditingController();
+  final rxDoctor = TextEditingController();
+  final rxPatient = TextEditingController();
+  final rxNid = TextEditingController();
   final lines = <_Line>[];
   String method = 'cash';
   bool _saving = false;
@@ -93,6 +97,7 @@ class _NewInvoicePageState extends State<NewInvoicePage> {
   int get subtotal => lines.fold(0, (a, l) => a + l.qty * l.price);
   int get disc => parseInt(discount.text) ?? 0;
   int get total => subtotal - disc;
+  bool get hasRestricted => lines.any((l) => l.product.isRestricted);
 
   Future<void> _addProduct(Product p) async {
     final i = lines.indexWhere((l) => l.product.id == p.id);
@@ -150,10 +155,20 @@ class _NewInvoicePageState extends State<NewInvoicePage> {
         paymentMethod: method,
         paidAmount: paidAmt,
         notes: notes.text.trim(),
+        prescription: hasRestricted
+            ? PrescriptionInfo(
+                prescriptionNo: rxNo.text,
+                doctorName: rxDoctor.text,
+                patientName: rxPatient.text.trim().isEmpty ? name.text : rxPatient.text,
+                patientNationalId: rxNid.text,
+              )
+            : null,
       );
       if (!mounted) return;
       Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => InvoiceDetailPage(invoiceId: inv.id)));
     } on InsufficientStock catch (e) {
+      snack(context, e.toString(), error: true);
+    } on PrescriptionRequired catch (e) {
       snack(context, e.toString(), error: true);
     } catch (e) {
       snack(context, 'تعذّر حفظ الفاتورة: $e', error: true);
@@ -230,6 +245,24 @@ class _NewInvoicePageState extends State<NewInvoicePage> {
             onChanged: (v) => setState(() => method = v ?? 'cash'),
           ),
         ),
+        if (hasRestricted)
+          Card(
+            color: Theme.of(context).colorScheme.secondaryContainer.withValues(alpha: .5),
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Row(children: [
+                  const Icon(Icons.lock_outline, size: 18),
+                  const SizedBox(width: 6),
+                  Text('بيانات الوصفة (دواء مقيّد)', style: Theme.of(context).textTheme.titleSmall),
+                ]),
+                formField('رقم الوصفة *', rxNo, required: true),
+                formField('اسم الطبيب *', rxDoctor, required: true),
+                formField('اسم المريض (اتركه فارغاً ليطابق اسم الفاتورة)', rxPatient),
+                formField('الرقم الوطني للمريض *', rxNid, type: TextInputType.number, required: true),
+              ]),
+            ),
+          ),
         formField('ملاحظات', notes),
         const Divider(),
         _row('المجموع', money(subtotal)),
@@ -349,7 +382,15 @@ class _InvoiceDetailPageState extends State<InvoiceDetailPage> {
         PopupMenuButton<String>(
           onSelected: (v) async {
             if (v == 'settle') {
-              await context.repo.settleInvoice(i.id);
+              final m = await showDialog<String>(
+                context: context,
+                builder: (ctx) => SimpleDialog(
+                  title: const Text('وسيلة سداد المتبقي'),
+                  children: [for (final m in ['cash', 'card', 'transfer']) SimpleDialogOption(onPressed: () => Navigator.pop(ctx, m), child: Text(paymentMethodLabel(m)))],
+                ),
+              );
+              if (m == null || !context.mounted) return;
+              await context.repo.settleInvoice(i.id, method: m);
               _load();
             } else if (v == 'void') {
               if (await confirm(context, 'حذف الفاتورة؟', body: 'ستعود الكميات إلى المخزون ولا يمكن التراجع.', danger: true, ok: 'حذف')) {

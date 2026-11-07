@@ -8,6 +8,7 @@ import '../data/database.dart';
 import '../data/importers.dart';
 import '../data/repository.dart';
 import 'common.dart';
+import 'companies_screen.dart';
 import 'scanner.dart';
 
 class InventoryScreen extends StatefulWidget {
@@ -18,7 +19,9 @@ class InventoryScreen extends StatefulWidget {
 
 class _InventoryScreenState extends State<InventoryScreen> {
   String _q = '';
-  String _filter = 'all'; // all | low | expiring | out
+  String _filter = 'all'; // all | low | expiring | out | restricted
+  int? _companyId;
+  String _companyName = '';
 
   Future<void> _scan() async {
     final raw = await scanBarcode(context);
@@ -54,16 +57,36 @@ class _InventoryScreenState extends State<InventoryScreen> {
         SizedBox(
           height: 48,
           child: ListView(scrollDirection: Axis.horizontal, padding: const EdgeInsets.symmetric(horizontal: 12), children: [
-            for (final (k, l) in [('all', 'الكل'), ('low', 'منخفض'), ('out', 'نفد'), ('expiring', 'قريب الانتهاء')])
+            for (final (k, l) in [('all', 'الكل'), ('low', 'منخفض'), ('out', 'نفد'), ('expiring', 'قريب الانتهاء'), ('restricted', 'مقيّد بوصفة')])
               Padding(
                 padding: const EdgeInsetsDirectional.only(end: 8),
                 child: ChoiceChip(label: Text(l), selected: _filter == k, onSelected: (_) => setState(() => _filter = k)),
               ),
+            Padding(
+              padding: const EdgeInsetsDirectional.only(end: 8),
+              child: InputChip(
+                avatar: const Icon(Icons.factory_outlined, size: 18),
+                label: Text(_companyId == null ? 'كل الشركات' : _companyName),
+                selected: _companyId != null,
+                onDeleted: _companyId == null ? null : () => setState(() => _companyId = null),
+                onPressed: () async {
+                  final picked = await showModalBottomSheet<CompanyInfo>(
+                    context: context,
+                    isScrollControlled: true,
+                    builder: (_) => const _CompanyPicker(),
+                  );
+                  if (picked != null) setState(() {
+                    _companyId = picked.company.id;
+                    _companyName = picked.company.name;
+                  });
+                },
+              ),
+            ),
           ]),
         ),
         Expanded(
           child: StreamBuilder<List<ProductStock>>(
-            stream: context.repo.watchProducts(query: _q),
+            stream: context.repo.watchProducts(query: _q, companyId: _companyId),
             builder: (ctx, snap) {
               if (!snap.hasData) return const Center(child: CircularProgressIndicator());
               var items = snap.data!;
@@ -72,6 +95,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                 'low' => items.where((p) => p.low && p.stock > 0).toList(),
                 'out' => items.where((p) => p.stock == 0).toList(),
                 'expiring' => items.where((p) => p.nearestExpiry != null && p.nearestExpiry!.isBefore(soon)).toList(),
+                'restricted' => items.where((p) => p.product.isRestricted).toList(),
                 _ => items,
               };
               if (items.isEmpty) return const EmptyState(Icons.inventory_2_outlined, 'لا توجد أصناف مطابقة.\nأضف صنفاً جديداً أو استورد الجرد من تبويب «البيانات».');
@@ -84,7 +108,10 @@ class _InventoryScreenState extends State<InventoryScreen> {
                     final it = items[i];
                     final expSoon = it.nearestExpiry != null && it.nearestExpiry!.isBefore(soon);
                     return ListTile(
-                      title: Text(it.product.name),
+                      title: Row(children: [
+                        Flexible(child: Text(it.product.name)),
+                        if (it.product.isRestricted) const Padding(padding: EdgeInsetsDirectional.only(start: 6), child: Tooltip(message: 'مقيّد بوصفة', child: Icon(Icons.lock_outline, size: 16, color: Colors.deepOrange))),
+                      ]),
                       subtitle: Text([
                         if (it.product.scientificName.isNotEmpty) it.product.scientificName,
                         'السعر ${money(it.product.salePrice)}',
@@ -134,12 +161,16 @@ class _ProductFormPageState extends State<ProductFormPage> {
   late final notes = TextEditingController(text: widget.product?.notes);
   int? _catalogId;
   int? _supplierId;
+  int? _companyId;
+  bool _restricted = false;
 
   @override
   void initState() {
     super.initState();
     _catalogId = widget.product?.catalogDrugId;
     _supplierId = widget.product?.defaultSupplierId;
+    _companyId = widget.product?.companyId;
+    _restricted = widget.product?.isRestricted ?? false;
   }
 
   Future<void> _pickCatalog() async {
@@ -156,6 +187,7 @@ class _ProductFormPageState extends State<ProductFormPage> {
       if (d.category.isNotEmpty) cat.text = d.category;
       if (d.unit.isNotEmpty) unit.text = d.unit;
       if (d.barcode != null) barcode.text = d.barcode!;
+      if (d.companyId != null) _companyId = d.companyId;
       if (d.referencePrice != null && sale.text.isEmpty) sale.text = '${d.referencePrice}';
     });
   }
@@ -189,6 +221,8 @@ class _ProductFormPageState extends State<ProductFormPage> {
       minStock: Value(parseInt(minStock.text) ?? 0),
       barcode: Value(bc.isEmpty ? null : bc),
       defaultSupplierId: Value(_supplierId),
+      companyId: Value(_companyId),
+      isRestricted: Value(_restricted),
       notes: Value(notes.text.trim()),
     ));
     if (mounted) Navigator.pop(context);
@@ -239,12 +273,73 @@ class _ProductFormPageState extends State<ProductFormPage> {
                 ),
               ),
             ),
+            StreamBuilder<List<CompanyInfo>>(
+              stream: context.repo.watchCompanies(),
+              builder: (ctx, s) {
+                final list = s.data ?? <CompanyInfo>[];
+                return Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 6),
+                  child: Row(children: [
+                    Expanded(
+                      child: DropdownButtonFormField<int?>(
+                        key: ValueKey('${list.length}-$_companyId'),
+                        initialValue: list.any((x) => x.company.id == _companyId) ? _companyId : null,
+                        decoration: const InputDecoration(labelText: 'الشركة المصنّعة', border: OutlineInputBorder()),
+                        items: [
+                          const DropdownMenuItem(value: null, child: Text('— بدون —')),
+                          for (final x in list) DropdownMenuItem(value: x.company.id, child: Text(x.company.name)),
+                        ],
+                        onChanged: (v) => setState(() => _companyId = v),
+                      ),
+                    ),
+                    IconButton.filledTonal(
+                      tooltip: 'شركة جديدة',
+                      icon: const Icon(Icons.add),
+                      onPressed: () async {
+                        final id = await showCompanyDialog(context);
+                        if (id != null) setState(() => _companyId = id);
+                      },
+                    ),
+                  ]),
+                );
+              },
+            ),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('دواء مقيّد بوصفة طبية'),
+              subtitle: const Text('يتطلب عند البيع: رقم الوصفة، اسم الطبيب، اسم المريض، الرقم الوطني، ويُسجَّل في سجل المقيّدة'),
+              value: _restricted,
+              onChanged: (v) => setState(() => _restricted = v),
+            ),
             formField('ملاحظات', notes, maxLines: 3),
           ]),
         ),
       ),
     );
   }
+}
+
+class _CompanyPicker extends StatelessWidget {
+  const _CompanyPicker();
+  @override
+  Widget build(BuildContext context) => SizedBox(
+        height: MediaQuery.sizeOf(context).height * .7,
+        child: StreamBuilder<List<CompanyInfo>>(
+          stream: context.repo.watchCompanies(),
+          builder: (ctx, s) {
+            final list = s.data ?? [];
+            if (list.isEmpty) return const EmptyState(Icons.factory_outlined, 'لا توجد شركات بعد. أضفها من «المزيد ← الشركات».');
+            return ListView.builder(
+              itemCount: list.length,
+              itemBuilder: (_, i) => ListTile(
+                title: Text(list[i].company.name),
+                trailing: Text('${list[i].productCount}'),
+                onTap: () => Navigator.pop(context, list[i]),
+              ),
+            );
+          },
+        ),
+      );
 }
 
 class _CatalogPicker extends StatefulWidget {
@@ -358,6 +453,7 @@ class _ProductDetailPageState extends State<ProductDetailPage> {
                       _kv('الحد الأدنى', '${p.minStock}'),
                       if (p.barcode != null) _kv('الباركود', p.barcode!),
                       if (p.category.isNotEmpty) _kv('التصنيف', p.category),
+                      if (p.isRestricted) _kv('الحالة', 'مقيّد بوصفة'),
                     ]),
                     if (p.notes.isNotEmpty) ...[const SizedBox(height: 8), Text(p.notes)],
                   ]),
