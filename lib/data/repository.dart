@@ -1,5 +1,6 @@
 import 'package:drift/drift.dart';
 
+import '../core/format.dart';
 import 'database.dart';
 
 class InsufficientStock implements Exception {
@@ -11,12 +12,75 @@ class InsufficientStock implements Exception {
       'الكمية غير كافية للصنف "$productName": المطلوب $requested والمتاح $available';
 }
 
+/// بيانات الوصفة الطبية لبيع الأدوية المقيّدة.
+class PrescriptionInfo {
+  final String prescriptionNo, doctorName, patientName, patientNationalId;
+  const PrescriptionInfo({
+    required this.prescriptionNo,
+    required this.doctorName,
+    required this.patientName,
+    required this.patientNationalId,
+  });
+  bool get isComplete =>
+      prescriptionNo.trim().isNotEmpty &&
+      doctorName.trim().isNotEmpty &&
+      patientName.trim().isNotEmpty &&
+      patientNationalId.trim().isNotEmpty;
+}
+
+class PrescriptionRequired implements Exception {
+  final List<String> products;
+  PrescriptionRequired(this.products);
+  @override
+  String toString() =>
+      'الأصناف التالية مقيّدة بوصفة وتتطلب رقم الوصفة واسم الطبيب واسم المريض والرقم الوطني: ${products.join('، ')}';
+}
+
 class InvoiceLine {
   final int productId;
   final int quantity;
   final int unitPrice;
   const InvoiceLine(this.productId, this.quantity, this.unitPrice);
 }
+
+class CompanyInfo {
+  final CatalogCompany company;
+  final int productCount;
+  const CompanyInfo(this.company, this.productCount);
+}
+
+class CashSummary {
+  final int totalIn, totalOut; // للفترة المطلوبة (قيم موجبة)
+  final Map<String, int> balanceByMethod; // رصيد تراكمي لكل وسيلة
+  const CashSummary(this.totalIn, this.totalOut, this.balanceByMethod);
+  int get net => totalIn - totalOut;
+  int get totalBalance => balanceByMethod.values.fold(0, (a, b) => a + b);
+  int get cashBalance => balanceByMethod['cash'] ?? 0;
+}
+
+class StatementRow {
+  final DateTime date;
+  final String description;
+  final int debit; // مشتريات (تزيد المستحق للمورد)
+  final int credit; // دفعات (تُنقص المستحق)
+  final int balance;
+  final String kind; // opening | order | payment
+  const StatementRow(this.date, this.description, this.debit, this.credit, this.balance, this.kind);
+}
+
+class SupplierStatement {
+  final Supplier supplier;
+  final int openingBalance;
+  final List<StatementRow> rows;
+  const SupplierStatement(this.supplier, this.openingBalance, this.rows);
+  int get balance => rows.isEmpty ? openingBalance : rows.last.balance;
+  int get totalPurchases => rows.where((r) => r.kind == 'order').fold(0, (a, r) => a + r.debit);
+  int get totalPaid => rows.where((r) => r.kind == 'payment').fold(0, (a, r) => a + r.credit);
+}
+
+const kExpenseCategories = ['إيجار', 'رواتب', 'كهرباء وماء', 'مواصلات', 'صيانة', 'مستلزمات', 'أخرى'];
+
+String normalizeMethod(String m) => (m == 'card' || m == 'transfer') ? m : 'cash';
 
 class ProductStock {
   final Product product;
@@ -100,10 +164,11 @@ class Repository {
   }
 
   /// الأصناف مع مجموع الكمية وأقرب انتهاء، مع بحث اختياري (اسم/علمي/باركود).
-  Stream<List<ProductStock>> watchProducts({String query = ''}) {
+  Stream<List<ProductStock>> watchProducts({String query = '', int? companyId}) {
     final q = db.select(db.products)
       ..where((t) => t.archived.equals(false))
       ..orderBy([(t) => OrderingTerm.asc(t.name)]);
+    if (companyId != null) q.where((t) => t.companyId.equals(companyId));
     final qs = query.trim();
     if (qs.isNotEmpty) {
       q.where((t) =>
@@ -187,11 +252,21 @@ class Repository {
     String paymentMethod = 'cash',
     int? paidAmount,
     String notes = '',
+    PrescriptionInfo? prescription,
     DateTime? now,
   }) {
     if (lines.isEmpty) throw ArgumentError('الفاتورة بلا أصناف');
     final when = now ?? DateTime.now();
     return db.transaction(() async {
+      // الأدوية المقيّدة تتطلب بيانات الوصفة كاملة قبل أي تغيير في البيانات.
+      final restricted = <Product>[];
+      for (final l in lines) {
+        final pr = await productById(l.productId);
+        if (pr != null && pr.isRestricted) restricted.add(pr);
+      }
+      if (restricted.isNotEmpty && (prescription == null || !prescription.isComplete)) {
+        throw PrescriptionRequired([for (final r in restricted) r.name]);
+      }
       var subtotal = 0;
       final number = await db.nextInvoiceNumber();
       // نحجز رقم الفاتورة بإدراج رأسها أولاً بقيم مؤقتة ثم نحدّثها.
@@ -232,6 +307,20 @@ class Repository {
               unitCost: Value(product.costPrice),
               lineTotal: l.quantity * l.unitPrice,
             ));
+        if (product.isRestricted) {
+          await db.into(db.restrictedRecords).insert(RestrictedRecordsCompanion.insert(
+                createdAt: when,
+                invoiceId: Value(invId),
+                invoiceNumber: Value(number),
+                productId: Value(product.id),
+                productName: product.name,
+                quantity: l.quantity,
+                prescriptionNo: prescription!.prescriptionNo.trim(),
+                doctorName: prescription.doctorName.trim(),
+                patientName: prescription.patientName.trim(),
+                patientNationalId: normalizeDigits(prescription.patientNationalId).trim(),
+              ));
+        }
         var remaining = l.quantity;
         for (final b in usable) {
           if (remaining == 0) break;
@@ -257,12 +346,47 @@ class Repository {
               total: Value(total),
               paidAmount: Value(paid > total ? total : paid),
               paymentStatus: Value(status)));
+      final received = paid > total ? total : paid;
+      if (received > 0) {
+        await _cash(
+            kind: 'sale',
+            amount: received,
+            method: normalizeMethod(paymentMethod),
+            category: 'مبيعات',
+            note: 'فاتورة $number',
+            at: when,
+            refType: 'invoice',
+            refId: invId);
+      }
       return (db.select(db.invoices)..where((t) => t.id.equals(invId))).getSingle();
     });
   }
 
   /// حذف فاتورة مع إرجاع الكميات إلى الدفعات التي خُصمت منها.
   Future<void> voidInvoice(int invoiceId) => db.transaction(() async {
+        final inv = await (db.select(db.invoices)..where((t) => t.id.equals(invoiceId))).getSingleOrNull();
+        // عكس الحركات المالية المرتبطة (تبقى الحركة الأصلية في السجل).
+        final entries = await (db.select(db.cashEntries)
+              ..where((t) => t.refType.equals('invoice') & t.refId.equals(invoiceId)))
+            .get();
+        final net = <String, int>{};
+        for (final e in entries) {
+          net[e.method] = (net[e.method] ?? 0) + e.amount;
+        }
+        for (final m in net.entries) {
+          if (m.value != 0) {
+            await _cash(
+                kind: 'void',
+                amount: -m.value,
+                method: m.key,
+                category: 'إلغاء فاتورة',
+                note: 'حذف فاتورة ${inv?.number ?? invoiceId}',
+                refType: 'invoice',
+                refId: invoiceId);
+          }
+        }
+        await (db.update(db.restrictedRecords)..where((t) => t.invoiceId.equals(invoiceId)))
+            .write(const RestrictedRecordsCompanion(voided: Value(true)));
         final items = await (db.select(db.invoiceItems)..where((t) => t.invoiceId.equals(invoiceId))).get();
         for (final it in items) {
           final allocs = await (db.select(db.invoiceItemBatches)..where((t) => t.invoiceItemId.equals(it.id))).get();
@@ -279,11 +403,23 @@ class Repository {
         await (db.delete(db.invoices)..where((t) => t.id.equals(invoiceId))).go();
       });
 
-  Future<void> settleInvoice(int invoiceId) async {
-    final inv = await (db.select(db.invoices)..where((t) => t.id.equals(invoiceId))).getSingle();
-    await (db.update(db.invoices)..where((t) => t.id.equals(invoiceId))).write(
-        InvoicesCompanion(paidAmount: Value(inv.total), paymentStatus: const Value('paid')));
-  }
+  /// تسجيل سداد المتبقي من فاتورة؛ يدخل الصندوق بوسيلة الدفع المختارة.
+  Future<void> settleInvoice(int invoiceId, {String method = 'cash'}) => db.transaction(() async {
+        final inv = await (db.select(db.invoices)..where((t) => t.id.equals(invoiceId))).getSingle();
+        final remaining = inv.total - inv.paidAmount;
+        await (db.update(db.invoices)..where((t) => t.id.equals(invoiceId))).write(
+            InvoicesCompanion(paidAmount: Value(inv.total), paymentStatus: const Value('paid')));
+        if (remaining > 0) {
+          await _cash(
+              kind: 'sale_settlement',
+              amount: remaining,
+              method: normalizeMethod(method),
+              category: 'سداد فاتورة',
+              note: 'سداد فاتورة ${inv.number}',
+              refType: 'invoice',
+              refId: invoiceId);
+        }
+      });
 
   Stream<List<Invoice>> watchInvoices({String query = ''}) {
     final q = db.select(db.invoices)..orderBy([(t) => OrderingTerm.desc(t.createdAt), (t) => OrderingTerm.desc(t.id)]);
@@ -345,11 +481,13 @@ class Repository {
   }
 
   /// استلام الأمر: كل بند يتحول إلى دفعة في المخزون، مرة واحدة فقط.
-  Future<void> receiveOrder(int orderId) => db.transaction(() async {
+  Future<void> receiveOrder(int orderId, {int paid = 0, String method = 'cash'}) => db.transaction(() async {
         final o = await (db.select(db.purchaseOrders)..where((t) => t.id.equals(orderId))).getSingle();
         if (o.status == 'received') throw StateError('الأمر مستلم سابقاً');
         if (o.status == 'cancelled') throw StateError('الأمر ملغى');
         final items = await orderItems(orderId);
+        final total = orderTotal(items);
+        if (paid < 0 || paid > total) throw StateError('المبلغ المدفوع يجب أن يكون بين 0 وإجمالي الأمر');
         for (final it in items) {
           await db.into(db.batches).insert(BatchesCompanion.insert(
                 productId: it.productId,
@@ -366,8 +504,248 @@ class Repository {
         }
         await (db.update(db.purchaseOrders)..where((t) => t.id.equals(orderId))).write(
             PurchaseOrdersCompanion(status: const Value('received'), receivedAt: Value(DateTime.now())));
+        if (paid > 0) {
+          await _cash(
+              kind: 'supplier_payment',
+              amount: -paid,
+              method: normalizeMethod(method),
+              category: 'دفع لمورد',
+              note: 'استلام أمر شراء #$orderId',
+              refType: 'order',
+              refId: orderId,
+              supplierId: o.supplierId);
+        }
       });
 
   int orderTotal(List<PurchaseOrderItem> items) =>
       items.fold<int>(0, (a, i) => a + i.quantity * i.unitCost);
+
+  // ═════════════ الصندوق ═════════════
+
+  Future<int> _cash({
+    required String kind,
+    required int amount,
+    String method = 'cash',
+    String category = '',
+    String note = '',
+    DateTime? at,
+    String? refType,
+    int? refId,
+    int? supplierId,
+  }) =>
+      db.into(db.cashEntries).insert(CashEntriesCompanion.insert(
+            createdAt: at ?? DateTime.now(),
+            kind: kind,
+            method: Value(method),
+            amount: amount,
+            category: Value(category),
+            note: Value(note),
+            refType: Value(refType),
+            refId: Value(refId),
+            supplierId: Value(supplierId),
+          ));
+
+  /// حركة يدوية. [amount] موجب دائماً؛ الإشارة تُحدَّد من [kind]:
+  /// opening/owner_in دخل، expense/owner_out خرج.
+  Future<int> addManualEntry({
+    required String kind,
+    required int amount,
+    String method = 'cash',
+    String category = '',
+    String note = '',
+    DateTime? at,
+  }) async {
+    if (amount <= 0) throw ArgumentError('المبلغ يجب أن يكون أكبر من صفر');
+    final sign = switch (kind) {
+      'opening' || 'owner_in' => 1,
+      'expense' || 'owner_out' => -1,
+      _ => throw ArgumentError('نوع حركة غير مدعوم: $kind'),
+    };
+    return _cash(kind: kind, amount: sign * amount, method: normalizeMethod(method), category: category, note: note, at: at);
+  }
+
+  /// دفعة مستقلة لمورد (تُخصم من الصندوق وتنقص رصيده المستحق).
+  Future<int> addSupplierPayment({
+    required int supplierId,
+    required int amount,
+    String method = 'cash',
+    String note = '',
+    DateTime? at,
+  }) async {
+    if (amount <= 0) throw ArgumentError('المبلغ يجب أن يكون أكبر من صفر');
+    return _cash(
+        kind: 'supplier_payment',
+        amount: -amount,
+        method: normalizeMethod(method),
+        category: 'دفع لمورد',
+        note: note,
+        at: at,
+        supplierId: supplierId);
+  }
+
+  Stream<List<CashEntry>> watchCash({String filter = 'all', DateTime? from, DateTime? to}) {
+    final q = db.select(db.cashEntries)
+      ..orderBy([(t) => OrderingTerm.desc(t.createdAt), (t) => OrderingTerm.desc(t.id)]);
+    if (filter == 'in') q.where((t) => t.amount.isBiggerThanValue(0));
+    if (filter == 'out') q.where((t) => t.amount.isSmallerThanValue(0));
+    if (from != null) q.where((t) => t.createdAt.isBiggerOrEqualValue(from));
+    if (to != null) q.where((t) => t.createdAt.isSmallerThanValue(to));
+    return q.watch();
+  }
+
+  Stream<CashSummary> watchCashSummary({DateTime? from, DateTime? to}) =>
+      db.select(db.cashEntries).watch().map((all) {
+        final bal = <String, int>{};
+        var tin = 0, tout = 0;
+        for (final e in all) {
+          bal[e.method] = (bal[e.method] ?? 0) + e.amount;
+          final inPeriod = (from == null || !e.createdAt.isBefore(from)) && (to == null || e.createdAt.isBefore(to));
+          if (inPeriod && e.kind != 'opening') {
+            if (e.amount > 0) {
+              tin += e.amount;
+            } else {
+              tout += -e.amount;
+            }
+          }
+        }
+        return CashSummary(tin, tout, bal);
+      });
+
+  Future<CashSummary> cashSummary({DateTime? from, DateTime? to}) => watchCashSummary(from: from, to: to).first;
+
+  /// إغلاق اليوم: يطابق الرصيد النقدي الفعلي مع رصيد النظام ويسجّل الفرق كتسوية.
+  Future<CashClosing> closeDay(int counted, {String note = ''}) => db.transaction(() async {
+        if (counted < 0) throw ArgumentError('المبلغ لا يمكن أن يكون سالباً');
+        final system = (await cashSummary()).cashBalance;
+        final diff = counted - system;
+        final id = await db.into(db.cashClosings).insert(CashClosingsCompanion.insert(
+              createdAt: DateTime.now(),
+              systemBalance: system,
+              countedAmount: counted,
+              difference: diff,
+              note: Value(note),
+            ));
+        if (diff != 0) {
+          await _cash(kind: 'adjustment', amount: diff, category: 'تسوية إغلاق', note: note.isEmpty ? 'فرق إغلاق اليوم' : note);
+        }
+        return (db.select(db.cashClosings)..where((t) => t.id.equals(id))).getSingle();
+      });
+
+  Stream<List<CashClosing>> watchClosings() =>
+      (db.select(db.cashClosings)..orderBy([(t) => OrderingTerm.desc(t.createdAt)])).watch();
+
+  // ═════════════ كشف حساب المورد ═════════════
+
+  /// المشتريات (أوامر مستلمة) تزيد المستحق للمورد، والدفعات تنقصه.
+  /// الرصيد الموجب = علينا للمورد.
+  Future<SupplierStatement> supplierStatement(int supplierId) async {
+    final sup = await (db.select(db.suppliers)..where((t) => t.id.equals(supplierId))).getSingle();
+    final orders = await (db.select(db.purchaseOrders)
+          ..where((t) => t.supplierId.equals(supplierId) & t.status.equals('received')))
+        .get();
+    final events = <({DateTime date, int order, String desc, int debit, int credit, String kind})>[];
+    for (final o in orders) {
+      final total = orderTotal(await orderItems(o.id));
+      events.add((date: o.receivedAt ?? o.createdAt, order: 0, desc: 'أمر شراء #${o.id}', debit: total, credit: 0, kind: 'order'));
+    }
+    final pays = await (db.select(db.cashEntries)
+          ..where((t) => t.kind.equals('supplier_payment') & t.supplierId.equals(supplierId)))
+        .get();
+    for (final e in pays) {
+      events.add((
+        date: e.createdAt,
+        order: 1,
+        desc: e.note.isEmpty ? 'دفعة' : e.note,
+        debit: 0,
+        credit: -e.amount,
+        kind: 'payment'
+      ));
+    }
+    events.sort((a, b) {
+      final c = a.date.compareTo(b.date);
+      return c != 0 ? c : a.order.compareTo(b.order);
+    });
+    var bal = sup.openingBalance;
+    final rows = <StatementRow>[];
+    if (sup.openingBalance != 0) {
+      rows.add(StatementRow(DateTime.fromMillisecondsSinceEpoch(0), 'رصيد افتتاحي (ذمم سابقة)', sup.openingBalance > 0 ? sup.openingBalance : 0, sup.openingBalance < 0 ? -sup.openingBalance : 0, bal, 'opening'));
+    }
+    for (final e in events) {
+      bal += e.debit - e.credit;
+      rows.add(StatementRow(e.date, e.desc, e.debit, e.credit, bal, e.kind));
+    }
+    return SupplierStatement(sup, sup.openingBalance, rows);
+  }
+
+  /// أرصدة كل الموردين: معرّف المورد → المستحق له.
+  Future<Map<int, int>> supplierBalances() async {
+    final sups = await db.select(db.suppliers).get();
+    final out = <int, int>{for (final s in sups) s.id: s.openingBalance};
+    final orders = await (db.select(db.purchaseOrders)..where((t) => t.status.equals('received'))).get();
+    final items = await db.select(db.purchaseOrderItems).get();
+    final totals = <int, int>{};
+    for (final i in items) {
+      totals[i.orderId] = (totals[i.orderId] ?? 0) + i.quantity * i.unitCost;
+    }
+    for (final o in orders) {
+      out[o.supplierId] = (out[o.supplierId] ?? 0) + (totals[o.id] ?? 0);
+    }
+    final pays = await (db.select(db.cashEntries)..where((t) => t.kind.equals('supplier_payment'))).get();
+    for (final e in pays) {
+      if (e.supplierId != null) out[e.supplierId!] = (out[e.supplierId!] ?? 0) + e.amount; // amount سالب
+    }
+    return out;
+  }
+
+  // ═════════════ الشركات ═════════════
+
+  Stream<List<CompanyInfo>> watchCompanies() {
+    final q = db.select(db.catalogCompanies)..orderBy([(t) => OrderingTerm.asc(t.name)]);
+    return q.watch().asyncMap((cs) async {
+      final prods = await (db.select(db.products)..where((t) => t.archived.equals(false))).get();
+      final count = <int, int>{};
+      for (final p in prods) {
+        if (p.companyId != null) count[p.companyId!] = (count[p.companyId!] ?? 0) + 1;
+      }
+      return [for (final c in cs) CompanyInfo(c, count[c.id] ?? 0)];
+    });
+  }
+
+  Future<int> saveCompany({int? id, required String name, String country = ''}) async {
+    final n = name.trim();
+    if (n.isEmpty) throw ArgumentError('اسم الشركة مطلوب');
+    final all = await db.select(db.catalogCompanies).get();
+    if (all.any((c) => c.id != id && normKey(c.name) == normKey(n))) {
+      throw StateError('توجد شركة بهذا الاسم مسبقاً');
+    }
+    return db.into(db.catalogCompanies).insertOnConflictUpdate(CatalogCompaniesCompanion(
+        id: id == null ? const Value.absent() : Value(id), name: Value(n), country: Value(country.trim())));
+  }
+
+  /// حذف شركة: تُفصل عن أصنافها (لا يُحذف أي صنف).
+  Future<void> deleteCompany(int id) => db.transaction(() async {
+        await (db.update(db.products)..where((t) => t.companyId.equals(id)))
+            .write(const ProductsCompanion(companyId: Value(null)));
+        await (db.update(db.catalogDrugs)..where((t) => t.companyId.equals(id)))
+            .write(const CatalogDrugsCompanion(companyId: Value(null)));
+        await (db.delete(db.catalogCompanies)..where((t) => t.id.equals(id))).go();
+      });
+
+  // ═════════════ سجل الأدوية المقيّدة ═════════════
+
+  Stream<List<RestrictedRecord>> watchRestricted({String query = ''}) {
+    final q = db.select(db.restrictedRecords)
+      ..orderBy([(t) => OrderingTerm.desc(t.createdAt), (t) => OrderingTerm.desc(t.id)]);
+    final s = query.trim();
+    if (s.isNotEmpty) {
+      q.where((t) =>
+          t.patientName.like('%$s%') |
+          t.patientNationalId.like('%$s%') |
+          t.prescriptionNo.like('%$s%') |
+          t.doctorName.like('%$s%') |
+          t.productName.like('%$s%') |
+          t.invoiceNumber.like('%$s%'));
+    }
+    return q.watch();
+  }
 }

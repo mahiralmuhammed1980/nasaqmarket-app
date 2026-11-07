@@ -31,6 +31,8 @@ class Suppliers extends Table {
   TextColumn get address => text().withDefault(const Constant(''))();
   TextColumn get paymentTerms => text().withDefault(const Constant(''))();
   TextColumn get notes => text().withDefault(const Constant(''))();
+  /// رصيد افتتاحي: مبلغ مستحق للمورد قبل بدء استخدام التطبيق (موجب = علينا للمورد).
+  IntColumn get openingBalance => integer().withDefault(const Constant(0))();
 }
 
 class Products extends Table {
@@ -47,6 +49,10 @@ class Products extends Table {
   IntColumn get defaultSupplierId => integer().nullable().references(Suppliers, #id)();
   TextColumn get notes => text().withDefault(const Constant(''))();
   BoolColumn get archived => boolean().withDefault(const Constant(false))();
+  /// الشركة المصنّعة (من قائمة الشركات).
+  IntColumn get companyId => integer().nullable().references(CatalogCompanies, #id)();
+  /// دواء مقيّد: لا يُباع إلا بوصفة وتُسجَّل بياناتها في سجل المقيّدة.
+  BoolColumn get isRestricted => boolean().withDefault(const Constant(false))();
 }
 
 @DataClassName('StockBatch')
@@ -123,4 +129,52 @@ class AppSettings extends Table {
   TextColumn get value => text()();
   @override
   Set<Column> get primaryKey => {key};
+}
+
+// ───────── الصندوق (حركة الأموال) ─────────
+
+/// حركة مالية. المبلغ بإشارة: موجب = دخل، سالب = خرج.
+/// kind: opening | sale | sale_settlement | supplier_payment | expense |
+///       owner_in | owner_out | adjustment | void
+/// method: cash | card | transfer
+class CashEntries extends Table {
+  IntColumn get id => integer().autoIncrement()();
+  DateTimeColumn get createdAt => dateTime()();
+  TextColumn get kind => text()();
+  TextColumn get method => text().withDefault(const Constant('cash'))();
+  IntColumn get amount => integer()();
+  TextColumn get category => text().withDefault(const Constant(''))();
+  TextColumn get note => text().withDefault(const Constant(''))();
+  /// ربط بمستند: invoice | order | null
+  TextColumn get refType => text().nullable()();
+  IntColumn get refId => integer().nullable()();
+  IntColumn get supplierId => integer().nullable().references(Suppliers, #id)();
+}
+
+/// إغلاق يومي: مطابقة الرصيد النقدي الفعلي مع رصيد النظام.
+class CashClosings extends Table {
+  IntColumn get id => integer().autoIncrement()();
+  DateTimeColumn get createdAt => dateTime()();
+  IntColumn get systemBalance => integer()();
+  IntColumn get countedAmount => integer()();
+  IntColumn get difference => integer()();
+  TextColumn get note => text().withDefault(const Constant(''))();
+}
+
+// ───────── سجل الأدوية المقيّدة ─────────
+
+class RestrictedRecords extends Table {
+  IntColumn get id => integer().autoIncrement()();
+  DateTimeColumn get createdAt => dateTime()();
+  IntColumn get invoiceId => integer().nullable()();
+  TextColumn get invoiceNumber => text().withDefault(const Constant(''))();
+  IntColumn get productId => integer().nullable()();
+  TextColumn get productName => text()();
+  IntColumn get quantity => integer()();
+  TextColumn get prescriptionNo => text()();
+  TextColumn get doctorName => text()();
+  TextColumn get patientName => text()();
+  TextColumn get patientNationalId => text()();
+  /// تُعلَّم عند حذف الفاتورة؛ يبقى السجل للمراجعة.
+  BoolColumn get voided => boolean().withDefault(const Constant(false))();
 }
