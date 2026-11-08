@@ -4,7 +4,9 @@ import 'package:flutter/material.dart';
 import '../app_state.dart';
 import '../core/format.dart';
 import '../data/database.dart';
+import 'cash_screen.dart';
 import 'common.dart';
+import 'supplier_statement_page.dart';
 
 class PurchasesScreen extends StatelessWidget {
   const PurchasesScreen({super.key});
@@ -40,18 +42,32 @@ class _SuppliersTab extends StatelessWidget {
             final list = snap.data ?? [];
             if (!snap.hasData) return const Center(child: CircularProgressIndicator());
             if (list.isEmpty) return const EmptyState(Icons.store_outlined, 'لا يوجد موردون بعد');
-            return Centered(
-              child: ListView.separated(
-                padding: const EdgeInsets.only(bottom: 88),
-                itemCount: list.length,
-                separatorBuilder: (_, __) => const Divider(height: 1),
-                itemBuilder: (_, i) => ListTile(
-                  leading: const CircleAvatar(child: Icon(Icons.store)),
-                  title: Text(list[i].name),
-                  subtitle: Text([list[i].phone, list[i].city, list[i].paymentTerms].where((e) => e.isNotEmpty).join(' • ')),
-                  onTap: () => showSupplierDialog(context, supplier: list[i]),
-                ),
-              ),
+            return FutureBuilder<Map<int, int>>(
+              future: context.repo.supplierBalances(),
+              builder: (ctx, bs) {
+                final bal = bs.data ?? {};
+                return Centered(
+                  child: ListView.separated(
+                    padding: const EdgeInsets.only(bottom: 88),
+                    itemCount: list.length,
+                    separatorBuilder: (_, __) => const Divider(height: 1),
+                    itemBuilder: (_, i) {
+                      final b = bal[list[i].id] ?? 0;
+                      return ListTile(
+                        leading: const CircleAvatar(child: Icon(Icons.store)),
+                        title: Text(list[i].name),
+                        subtitle: Text([list[i].phone, list[i].city, list[i].paymentTerms].where((e) => e.isNotEmpty).join(' • ')),
+                        trailing: Column(mainAxisAlignment: MainAxisAlignment.center, crossAxisAlignment: CrossAxisAlignment.end, children: [
+                          Text(b == 0 ? 'مسدّد' : money(b.abs()), style: TextStyle(fontWeight: FontWeight.bold, color: b > 0 ? Colors.red.shade700 : (b < 0 ? Colors.green.shade700 : null))),
+                          Text(b > 0 ? 'مستحق له' : (b < 0 ? 'رصيد لنا' : ''), style: Theme.of(context).textTheme.bodySmall),
+                        ]),
+                        onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => SupplierStatementPage(supplierId: list[i].id))),
+                        onLongPress: () => showSupplierDialog(context, supplier: list[i]),
+                      );
+                    },
+                  ),
+                );
+              },
             );
           },
         ),
@@ -67,6 +83,7 @@ Future<void> showSupplierDialog(BuildContext context, {Supplier? supplier}) asyn
     'city': TextEditingController(text: supplier?.city),
     'address': TextEditingController(text: supplier?.address),
     'terms': TextEditingController(text: supplier?.paymentTerms),
+    'opening': TextEditingController(text: supplier == null ? '' : '${supplier.openingBalance}'),
     'notes': TextEditingController(text: supplier?.notes),
   };
   final form = GlobalKey<FormState>();
@@ -88,6 +105,7 @@ Future<void> showSupplierDialog(BuildContext context, {Supplier? supplier}) asyn
               formField('المدينة', f['city']!),
               formField('العنوان', f['address']!),
               formField('شروط الدفع', f['terms']!),
+              formField('رصيد افتتاحي (ذمم سابقة للمورد)', f['opening']!, type: const TextInputType.numberWithOptions(signed: true)),
               formField('ملاحظات', f['notes']!, maxLines: 2),
             ]),
           ),
@@ -106,6 +124,13 @@ Future<void> showSupplierDialog(BuildContext context, {Supplier? supplier}) asyn
                 }
               },
               child: const Text('حذف')),
+        if (supplier != null)
+          TextButton(
+              onPressed: () {
+                Navigator.pop(ctx);
+                Navigator.push(context, MaterialPageRoute(builder: (_) => SupplierStatementPage(supplierId: supplier.id)));
+              },
+              child: const Text('كشف الحساب')),
         TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('إلغاء')),
         FilledButton(
             onPressed: () async {
@@ -119,6 +144,7 @@ Future<void> showSupplierDialog(BuildContext context, {Supplier? supplier}) asyn
                 city: Value(f['city']!.text.trim()),
                 address: Value(f['address']!.text.trim()),
                 paymentTerms: Value(f['terms']!.text.trim()),
+                openingBalance: Value(parseInt(f['opening']!.text) ?? 0),
                 notes: Value(f['notes']!.text.trim()),
               ));
               if (ctx.mounted) Navigator.pop(ctx);
@@ -400,9 +426,10 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
             FilledButton.icon(
               style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
               onPressed: () async {
-                if (await confirm(context, 'استلام الأمر؟', body: 'ستُضاف الدفعات إلى المخزون ولا يمكن التراجع.', ok: 'استلام')) {
-                  await _do(() => repo.receiveOrder(o.id), 'تم الاستلام وإضافة الدفعات إلى المخزون');
-                }
+                final total = repo.orderTotal(items);
+                final r = await _askPayment(context, total);
+                if (r == null) return;
+                await _do(() => repo.receiveOrder(o.id, paid: r.$1, method: r.$2), 'تم الاستلام وإضافة الدفعات إلى المخزون');
               },
               icon: const Icon(Icons.inventory),
               label: const Text('استلام الأمر وإضافته للمخزون'),
@@ -413,4 +440,51 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
       ),
     );
   }
+}
+
+
+/// حوار الاستلام: المبلغ المدفوع الآن (0 = آجل بالكامل) ووسيلة الدفع.
+Future<(int, String)?> _askPayment(BuildContext context, int total) async {
+  final c = TextEditingController(text: '$total');
+  var method = 'cash';
+  String? err;
+  return showDialog<(int, String)>(
+    context: context,
+    builder: (ctx) => StatefulBuilder(
+      builder: (ctx, setS) => AlertDialog(
+        title: const Text('استلام الأمر'),
+        content: Column(mainAxisSize: MainAxisSize.min, children: [
+          Text('إجمالي الأمر: ${money(total)}', style: const TextStyle(fontWeight: FontWeight.bold)),
+          const Text('ستُضاف الدفعات إلى المخزون ولا يمكن التراجع.'),
+          const SizedBox(height: 8),
+          TextField(
+            controller: c,
+            keyboardType: TextInputType.number,
+            decoration: InputDecoration(labelText: 'المدفوع الآن (0 = آجل)', border: const OutlineInputBorder(), errorText: err),
+          ),
+          const SizedBox(height: 8),
+          DropdownButtonFormField<String>(
+            initialValue: method,
+            decoration: const InputDecoration(labelText: 'وسيلة الدفع', border: OutlineInputBorder()),
+            items: [for (final m in ['cash', 'card', 'transfer']) DropdownMenuItem(value: m, child: Text(methodLabel(m)))],
+            onChanged: (v) => setS(() => method = v ?? 'cash'),
+          ),
+        ]),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('إلغاء')),
+          FilledButton(
+            onPressed: () {
+              final n = parseInt(c.text);
+              if (n == null || n < 0 || n > total) {
+                setS(() => err = 'أدخل مبلغاً بين 0 و${money(total)}');
+                return;
+              }
+              Navigator.pop(ctx, (n, method));
+            },
+            child: const Text('استلام'),
+          ),
+        ],
+      ),
+    ),
+  );
 }

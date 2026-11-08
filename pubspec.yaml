@@ -1,7 +1,7 @@
 name: nasaq_pharma
 description: "نسق فارما: إدارة صيدلية مستقلة (أندرويد، بيانات محلية)."
 publish_to: 'none'
-version: 1.0.0+1
+version: 1.0.1+2
 
 environment:
   sdk: ^3.13.7

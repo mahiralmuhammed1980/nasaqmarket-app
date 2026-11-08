@@ -4,11 +4,11 @@ import '../app_state.dart';
 import '../services/updater.dart';
 import 'common.dart';
 import 'dashboard_screen.dart';
-import 'data_screen.dart';
+import 'cash_screen.dart';
 import 'inventory_screen.dart';
 import 'purchases_screen.dart';
+import 'more_screen.dart';
 import 'sales_screen.dart';
-import 'settings_screen.dart';
 
 class _Dest {
   final String label;
@@ -31,8 +31,8 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
     _Dest('المخزون', Icons.inventory_2_outlined, Icons.inventory_2, () => const InventoryScreen()),
     _Dest('المبيعات', Icons.receipt_long_outlined, Icons.receipt_long, () => const SalesScreen()),
     _Dest('المشتريات', Icons.local_shipping_outlined, Icons.local_shipping, () => const PurchasesScreen()),
-    _Dest('البيانات', Icons.storage_outlined, Icons.storage, () => const DataScreen()),
-    _Dest('الإعدادات', Icons.settings_outlined, Icons.settings, () => const SettingsScreen()),
+    _Dest('الصندوق', Icons.account_balance_wallet_outlined, Icons.account_balance_wallet, () => const CashScreen()),
+    _Dest('المزيد', Icons.more_horiz, Icons.more_horiz, () => const MoreScreen()),
   ];
   DateTime? _pausedAt;
 

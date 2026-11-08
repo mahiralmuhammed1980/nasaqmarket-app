@@ -7,11 +7,11 @@ import '../data/repository.dart';
 import 'common.dart';
 
 class _DashData {
-  final int productCount, stockValue, todaySales, monthSales;
+  final int productCount, stockValue, todaySales, monthSales, cashBalance, supplierDebt;
   final List<BatchInfo> expiring;
   final List<ProductStock> low;
   final List<Invoice> recent;
-  _DashData(this.productCount, this.stockValue, this.todaySales, this.monthSales, this.expiring, this.low, this.recent);
+  _DashData(this.productCount, this.stockValue, this.todaySales, this.monthSales, this.cashBalance, this.supplierDebt, this.expiring, this.low, this.recent);
 }
 
 class DashboardScreen extends StatefulWidget {
@@ -37,6 +37,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
       await repo.inventoryValueAtCost(),
       await repo.salesTotalSince(DateTime(now.year, now.month, now.day)),
       await repo.salesTotalSince(DateTime(now.year, now.month)),
+      (await repo.cashSummary()).totalBalance,
+      (await repo.supplierBalances()).values.where((v) => v > 0).fold<int>(0, (a, b) => a + b),
       await repo.expiringBatches(withinDays: 90),
       await repo.lowStock(),
       await repo.watchInvoices().first,
@@ -63,6 +65,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
           StatCard('قيمة المخزون', money(d.stockValue), Icons.account_balance_wallet),
           StatCard('مبيعات اليوم', money(d.todaySales), Icons.today, color: Colors.teal),
           StatCard('مبيعات الشهر', money(d.monthSales), Icons.calendar_month, color: Colors.indigo),
+          StatCard('رصيد الصندوق', money(d.cashBalance), Icons.account_balance_wallet, color: d.cashBalance < 0 ? Colors.red : Colors.green.shade700),
+          StatCard('مستحق للموردين', money(d.supplierDebt), Icons.local_shipping, color: Colors.deepOrange),
         ];
         final expired = d.expiring.where((b) => b.daysToExpiry < 0).toList();
         final soon = d.expiring.where((b) => b.daysToExpiry >= 0).toList();
@@ -76,7 +80,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   shrinkWrap: true,
                   physics: const NeverScrollableScrollPhysics(),
                   gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                    crossAxisCount: wide ? 4 : 2,
+                    crossAxisCount: wide ? 3 : 2,
                     mainAxisExtent: 84,
                     crossAxisSpacing: 8,
                     mainAxisSpacing: 8,
