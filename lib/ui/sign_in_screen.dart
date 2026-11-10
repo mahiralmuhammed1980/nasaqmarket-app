@@ -1,32 +1,32 @@
 import 'package:flutter/material.dart';
 
 import '../app_state.dart';
-import '../services/license.dart';
+import '../services/auth.dart';
 import 'data_screen.dart';
 
-class ActivationScreen extends StatefulWidget {
-  const ActivationScreen({super.key});
+/// تسجيل الدخول بحساب Google إلزامي: يضمن وجود Google Drive للنسخ الاحتياطي والمزامنة.
+class SignInScreen extends StatefulWidget {
+  const SignInScreen({super.key});
   @override
-  State<ActivationScreen> createState() => _ActivationScreenState();
+  State<SignInScreen> createState() => _SignInScreenState();
 }
 
-class _ActivationScreenState extends State<ActivationScreen> {
+class _SignInScreenState extends State<SignInScreen> {
   bool _busy = false;
   String? _error;
 
-  Future<void> _activate() async {
+  Future<void> _signIn() async {
     final app = context.app;
     setState(() {
       _busy = true;
       _error = null;
     });
     try {
-      final lic = await app.license.activate();
-      app.onActivated(lic);
+      await app.signIn();
       if (!mounted) return;
-      // جهاز جديد أو إعادة تفعيل: اعرض استعادة آخر نسخة إن وُجدت.
+      // جهاز جديد: اعرض استعادة آخر نسخة من Drive إن وُجدت.
       await offerRestoreFromDrive(context);
-    } on ActivationException catch (e) {
+    } on AuthException catch (e) {
       setState(() => _error = e.message);
     } catch (e) {
       setState(() => _error = 'تعذّر تسجيل الدخول: $e');
@@ -46,26 +46,29 @@ class _ActivationScreenState extends State<ActivationScreen> {
             child: ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 420),
               child: Column(mainAxisSize: MainAxisSize.min, children: [
-                Icon(Icons.medication_liquid, size: 84, color: cs.primary),
+                Icon(Icons.storefront, size: 84, color: cs.primary),
                 const SizedBox(height: 12),
-                Text('نسق فارما', style: Theme.of(context).textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.bold)),
+                Text('نسق ماركت', style: Theme.of(context).textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.bold)),
                 const SizedBox(height: 8),
-                const Text('إدارة الصيدلية: المخزون والمبيعات والمشتريات', textAlign: TextAlign.center),
+                const Text('محاسبة ومخزون لمحلك: بقالية، ملابس، أحذية، كهربائيات وغيرها', textAlign: TextAlign.center),
                 const SizedBox(height: 32),
                 const Text(
-                  'سجّل الدخول بحساب Google المصرّح له لتفعيل التطبيق على هذا الجهاز. '
-                  'يحتاج التفعيل اتصالاً بالإنترنت مرة واحدة فقط.',
+                  'سجّل الدخول بحساب Google. تُحفظ بياناتك على هاتفك، وتُنسخ تلقائياً إلى Google Drive الخاص بك '
+                  'فلا تضيع إن تعطّل الهاتف أو بدّلته.',
                   textAlign: TextAlign.center,
                 ),
                 const SizedBox(height: 20),
                 FilledButton.icon(
-                  onPressed: _busy ? null : _activate,
+                  onPressed: _busy ? null : _signIn,
                   icon: _busy
                       ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
                       : const Icon(Icons.login),
                   label: const Text('تسجيل الدخول بحساب Google'),
                   style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
                 ),
+                const SizedBox(height: 8),
+                Text('يلزم السماح بالوصول إلى مجلد التطبيق المخفي في Drive (لا نرى أي ملفات أخرى).',
+                    textAlign: TextAlign.center, style: Theme.of(context).textTheme.bodySmall),
                 if (_error != null) ...[
                   const SizedBox(height: 16),
                   Card(
@@ -73,8 +76,6 @@ class _ActivationScreenState extends State<ActivationScreen> {
                     child: Padding(padding: const EdgeInsets.all(12), child: Text(_error!, style: TextStyle(color: cs.onErrorContainer))),
                   ),
                 ],
-                if (context.app.devBypass)
-                  TextButton(onPressed: () {}, child: const Text('وضع التطوير مفعّل')),
               ]),
             ),
           ),

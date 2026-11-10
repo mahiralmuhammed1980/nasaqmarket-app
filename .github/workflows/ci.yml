@@ -36,6 +36,6 @@ jobs:
       - run: flutter build apk --debug
       - uses: actions/upload-artifact@v4
         with:
-          name: nasaq-pharma-debug-apk
+          name: nasaq-market-debug-apk
           path: build/app/outputs/flutter-apk/app-debug.apk
           retention-days: 7

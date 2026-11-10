@@ -28,7 +28,7 @@ class _SalesScreenState extends State<SalesScreen> {
           label: const Text('فاتورة جديدة'),
         ),
         body: Column(children: [
-          SearchBox(onChanged: (v) => setState(() => _q = v), hint: 'ابحث باسم المريض أو رقم الفاتورة أو الهاتف'),
+          SearchBox(onChanged: (v) => setState(() => _q = v), hint: 'ابحث باسم الزبون أو رقم الفاتورة أو الهاتف'),
           Expanded(
             child: StreamBuilder<List<Invoice>>(
               stream: context.repo.watchInvoices(query: _q),
@@ -44,7 +44,7 @@ class _SalesScreenState extends State<SalesScreen> {
                     itemBuilder: (_, i) {
                       final inv = list[i];
                       return ListTile(
-                        title: Text(inv.patientName),
+                        title: Text(inv.customerName.isEmpty ? 'زبون نقدي' : inv.customerName),
                         subtitle: Text('${inv.number} • ${dateTimeFmt(inv.createdAt)}'),
                         trailing: Column(mainAxisAlignment: MainAxisAlignment.center, crossAxisAlignment: CrossAxisAlignment.end, children: [
                           Text(money(inv.total), style: const TextStyle(fontWeight: FontWeight.bold)),
@@ -67,10 +67,11 @@ class _SalesScreenState extends State<SalesScreen> {
 
 class _Line {
   final Product product;
-  final int stock;
-  int qty;
+  final double stock;
+  double qty;
   int price;
   _Line(this.product, this.stock) : qty = 1, price = product.salePrice;
+  int get total => (qty * price).round();
 }
 
 class NewInvoicePage extends StatefulWidget {
@@ -86,18 +87,13 @@ class _NewInvoicePageState extends State<NewInvoicePage> {
   final discount = TextEditingController(text: '0');
   final paid = TextEditingController();
   final notes = TextEditingController();
-  final rxNo = TextEditingController();
-  final rxDoctor = TextEditingController();
-  final rxPatient = TextEditingController();
-  final rxNid = TextEditingController();
   final lines = <_Line>[];
   String method = 'cash';
   bool _saving = false;
 
-  int get subtotal => lines.fold(0, (a, l) => a + l.qty * l.price);
+  int get subtotal => lines.fold(0, (a, l) => a + l.total);
   int get disc => parseInt(discount.text) ?? 0;
   int get total => subtotal - disc;
-  bool get hasRestricted => lines.any((l) => l.product.isRestricted);
 
   Future<void> _addProduct(Product p) async {
     final i = lines.indexWhere((l) => l.product.id == p.id);
@@ -105,7 +101,7 @@ class _NewInvoicePageState extends State<NewInvoicePage> {
     if (!mounted) return;
     setState(() {
       if (i >= 0) {
-        lines[i].qty++;
+        lines[i].qty = q3(lines[i].qty + 1);
       } else {
         lines.add(_Line(p, stock));
       }
@@ -148,33 +144,40 @@ class _NewInvoicePageState extends State<NewInvoicePage> {
     try {
       final paidAmt = paid.text.trim().isEmpty ? total : (parseInt(paid.text) ?? total);
       final inv = await context.repo.createInvoice(
-        patientName: name.text.trim(),
-        patientPhone: phone.text.trim(),
+        customerName: name.text.trim(),
+        customerPhone: phone.text.trim(),
         lines: [for (final l in lines) InvoiceLine(l.product.id, l.qty, l.price)],
         discount: disc,
         paymentMethod: method,
         paidAmount: paidAmt,
         notes: notes.text.trim(),
-        prescription: hasRestricted
-            ? PrescriptionInfo(
-                prescriptionNo: rxNo.text,
-                doctorName: rxDoctor.text,
-                patientName: rxPatient.text.trim().isEmpty ? name.text : rxPatient.text,
-                patientNationalId: rxNid.text,
-              )
-            : null,
       );
       if (!mounted) return;
       Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => InvoiceDetailPage(invoiceId: inv.id)));
     } on InsufficientStock catch (e) {
-      snack(context, e.toString(), error: true);
-    } on PrescriptionRequired catch (e) {
       snack(context, e.toString(), error: true);
     } catch (e) {
       snack(context, 'تعذّر حفظ الفاتورة: $e', error: true);
     } finally {
       if (mounted) setState(() => _saving = false);
     }
+  }
+
+  Future<void> _editQty(_Line l) async {
+    final cfg = context.appRead.cfg;
+    final c = TextEditingController(text: qtyFmt(l.qty));
+    final v = await showDialog<double>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('الكمية (${l.product.unit})'),
+        content: TextField(controller: c, keyboardType: cfg.qtyKeyboard, autofocus: true),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('إلغاء')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, cfg.readQty(c.text)), child: const Text('حفظ')),
+        ],
+      ),
+    );
+    if (v != null && v > 0) setState(() => l.qty = v);
   }
 
   @override
@@ -199,13 +202,16 @@ class _NewInvoicePageState extends State<NewInvoicePage> {
                   final l = lines[i];
                   final over = l.qty > l.stock;
                   return ListTile(
-                    title: Text(l.product.name),
-                    subtitle: Text('${money(l.price)} × ${l.qty} = ${money(l.price * l.qty)}${over ? '\nالمتاح ${l.stock} فقط' : ''}',
+                    title: Text(l.product.displayName),
+                    subtitle: Text('${money(l.price)} × ${qtyFmt(l.qty)} = ${money(l.total)}${over ? '\nالمتاح ${qtyFmt(l.stock)} فقط' : ''}',
                         style: TextStyle(color: over ? Theme.of(context).colorScheme.error : null)),
                     trailing: Row(mainAxisSize: MainAxisSize.min, children: [
-                      IconButton(icon: const Icon(Icons.remove_circle_outline), onPressed: l.qty > 1 ? () => setState(() => l.qty--) : null),
-                      Text('${l.qty}', style: const TextStyle(fontWeight: FontWeight.bold)),
-                      IconButton(icon: const Icon(Icons.add_circle_outline), onPressed: () => setState(() => l.qty++)),
+                      IconButton(icon: const Icon(Icons.remove_circle_outline), onPressed: l.qty > 1 ? () => setState(() => l.qty = q3(l.qty - 1)) : null),
+                      InkWell(
+                        onTap: () => _editQty(l),
+                        child: Padding(padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8), child: Text(qtyFmt(l.qty), style: const TextStyle(fontWeight: FontWeight.bold))),
+                      ),
+                      IconButton(icon: const Icon(Icons.add_circle_outline), onPressed: () => setState(() => l.qty = q3(l.qty + 1))),
                       IconButton(icon: const Icon(Icons.delete_outline), onPressed: () => setState(() => lines.removeAt(i))),
                     ]),
                     onTap: () async {
@@ -229,8 +235,8 @@ class _NewInvoicePageState extends State<NewInvoicePage> {
     final side = Form(
       key: _form,
       child: ListView(padding: const EdgeInsets.all(12), children: [
-        formField('اسم المريض *', name, required: true),
-        formField('هاتف المريض', phone, type: TextInputType.phone),
+        formField('اسم الزبون (اختياري)', name),
+        formField('هاتف الزبون (اختياري)', phone, type: TextInputType.phone),
         Row(children: [
           Expanded(child: formField('الخصم', discount, type: TextInputType.number, onChanged: (_) => setState(() {}))),
           const SizedBox(width: 8),
@@ -245,24 +251,6 @@ class _NewInvoicePageState extends State<NewInvoicePage> {
             onChanged: (v) => setState(() => method = v ?? 'cash'),
           ),
         ),
-        if (hasRestricted)
-          Card(
-            color: Theme.of(context).colorScheme.secondaryContainer.withValues(alpha: .5),
-            child: Padding(
-              padding: const EdgeInsets.all(12),
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Row(children: [
-                  const Icon(Icons.lock_outline, size: 18),
-                  const SizedBox(width: 6),
-                  Text('بيانات الوصفة (دواء مقيّد)', style: Theme.of(context).textTheme.titleSmall),
-                ]),
-                formField('رقم الوصفة *', rxNo, required: true),
-                formField('اسم الطبيب *', rxDoctor, required: true),
-                formField('اسم المريض (اتركه فارغاً ليطابق اسم الفاتورة)', rxPatient),
-                formField('الرقم الوطني للمريض *', rxNid, type: TextInputType.number, required: true),
-              ]),
-            ),
-          ),
         formField('ملاحظات', notes),
         const Divider(),
         _row('المجموع', money(subtotal)),
@@ -322,8 +310,8 @@ class _ProductPickerState extends State<_ProductPicker> {
                   itemCount: list.length,
                   itemBuilder: (_, i) => ListTile(
                     enabled: list[i].stock > 0,
-                    title: Text(list[i].product.name),
-                    subtitle: Text('المتاح ${list[i].stock} • ${money(list[i].product.salePrice)}'),
+                    title: Text(list[i].product.displayName),
+                    subtitle: Text('المتاح ${qtyFmt(list[i].stock)} • ${money(list[i].product.salePrice)}'),
                     onTap: () => Navigator.pop(context, list[i].product),
                   ),
                 );
@@ -363,7 +351,7 @@ class _InvoiceDetailPageState extends State<InvoiceDetailPage> {
     });
   }
 
-  Future<List<int>> _pdf() async => buildInvoicePdf(inv!, items, context.app.pharmacy);
+  Future<List<int>> _pdf() async => buildInvoicePdf(inv!, items, context.app.store);
 
   @override
   Widget build(BuildContext context) {
@@ -408,16 +396,16 @@ class _InvoiceDetailPageState extends State<InvoiceDetailPage> {
       body: Centered(
         maxWidth: 700,
         child: ListView(padding: const EdgeInsets.all(16), children: [
-          Text(context.app.pharmacy.name.isEmpty ? 'صيدلية' : context.app.pharmacy.name, style: Theme.of(context).textTheme.titleLarge),
+          Text(context.app.store.name.isEmpty ? 'نسق ماركت' : context.app.store.name, style: Theme.of(context).textTheme.titleLarge),
           const SizedBox(height: 8),
-          Text('المريض: ${i.patientName}${i.patientPhone.isEmpty ? '' : ' • ${i.patientPhone}'}'),
+          Text('الزبون: ${i.customerName.isEmpty ? 'زبون نقدي' : i.customerName}${i.customerPhone.isEmpty ? '' : ' • ${i.customerPhone}'}'),
           Text('التاريخ: ${dateTimeFmt(i.createdAt)}'),
           const Divider(height: 24),
           for (final it in items)
             ListTile(
               contentPadding: EdgeInsets.zero,
               title: Text(it.productName),
-              subtitle: Text('${money(it.unitPrice)} × ${it.quantity}'),
+              subtitle: Text('${money(it.unitPrice)} × ${qtyFmt(it.quantity)}'),
               trailing: Text(money(it.lineTotal), style: const TextStyle(fontWeight: FontWeight.bold)),
             ),
           const Divider(height: 24),

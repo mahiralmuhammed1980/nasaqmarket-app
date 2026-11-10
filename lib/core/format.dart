@@ -2,9 +2,35 @@ import 'package:intl/intl.dart';
 
 final _numFmt = NumberFormat('#,##0', 'en');
 
-/// تنسيق المبلغ بالليرة السورية (أعداد صحيحة بلا كسور).
-String money(int v) => '${_numFmt.format(v)} ل.س';
+/// رمز العملة المعروض بجانب المبالغ (يُضبط من إعدادات المحل).
+String kCurrency = 'ل.س';
+
+/// تنسيق المبلغ (أعداد صحيحة بلا كسور).
+String money(int v) => '${_numFmt.format(v)} $kCurrency';
 String numFmt(int v) => _numFmt.format(v);
+
+/// الكميات تُخزَّن كأعداد عشرية مقرّبة إلى 3 منازل لتفادي أخطاء الفاصلة العائمة.
+double q3(double v) => (v * 1000).round() / 1000;
+
+/// يعرض الكمية: صحيحة بلا كسر، وعشرية بحد أقصى 3 منازل بلا أصفار زائدة.
+String qtyFmt(num v) {
+  final d = q3(v.toDouble());
+  if (d == d.roundToDouble()) return _numFmt.format(d.round());
+  return d.toStringAsFixed(3).replaceFirst(RegExp(r'0+$'), '').replaceFirst(RegExp(r'\.$'), '');
+}
+
+/// يقرأ كمية عشرية (تقبل الفاصلة العربية والأرقام العربية). null إن فشل.
+double? parseQty(String? s) {
+  if (s == null) return null;
+  var t = normalizeDigits(s).replaceAll(RegExp(r'[\s٬]'), '').replaceAll('٫', '.');
+  // فاصلة واحدة بعدها ليس 3 أرقام تُعامل كفاصلة عشرية (0,5)، وإلا فهي فاصل آلاف (1,000).
+  final comma = RegExp(r'^[^,]*,(\d*)$').firstMatch(t);
+  if (comma != null && !t.contains('.') && comma[1]!.length != 3) t = t.replaceFirst(',', '.');
+  t = t.replaceAll(',', '');
+  if (t.isEmpty) return null;
+  final v = double.tryParse(t);
+  return v == null || v.isNaN || v.isInfinite ? null : q3(v);
+}
 
 String _2(int n) => n.toString().padLeft(2, '0');
 
@@ -35,7 +61,7 @@ int? parseInt(String? s) {
 }
 
 /// يقرأ تاريخاً بصيغ: yyyy-MM-dd، dd/MM/yyyy، MM/yyyy، yyyy/MM. null إن فشل.
-/// تاريخ "شهر/سنة" يُعتبر آخر يوم في الشهر (كما هو متعارف في الأدوية).
+/// تاريخ "شهر/سنة" يُعتبر آخر يوم في الشهر (كما هو متعارف في المواد الغذائية).
 DateTime? parseDate(String? s) {
   if (s == null) return null;
   final t = normalizeDigits(s).trim();
@@ -62,7 +88,7 @@ DateTime? _endOfMonth(int y, int mo) {
   return DateTime(y, mo + 1, 0);
 }
 
-/// لتطبيع مفاتيح المطابقة (أسماء الأدوية): أحرف صغيرة، بلا مسافات زائدة.
+/// لتطبيع مفاتيح المطابقة (أسماء الأصناف): أحرف صغيرة، بلا مسافات زائدة.
 String normKey(String s) => normalizeDigits(s)
     .toLowerCase()
     .replaceAll(RegExp(r'[ً-ْـ]'), '')

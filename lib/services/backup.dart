@@ -91,6 +91,14 @@ class _AuthClient extends http.BaseClient {
       _inner.send(request..headers.addAll(headers));
 }
 
+const kGoogleServerClientId = String.fromEnvironment('GOOGLE_SERVER_CLIENT_ID');
+
+Future<void>? _googleInit;
+
+/// تهيئة Google Sign-In مرة واحدة فقط لكل تشغيل.
+Future<void> ensureGoogleInit() => _googleInit ??= GoogleSignIn.instance
+    .initialize(serverClientId: kGoogleServerClientId.isEmpty ? null : kGoogleServerClientId);
+
 /// النسخ الاحتياطي على Google Drive داخل مجلد التطبيق المخفي (appDataFolder).
 /// النطاق drive.appdata فقط: التطبيق لا يرى أي ملف آخر في درايف الزبون.
 class DriveBackupService {
@@ -98,7 +106,7 @@ class DriveBackupService {
   static const keep = 10;
 
   Future<drive.DriveApi> _api({bool interactive = false}) async {
-    await GoogleSignIn.instance.initialize();
+    await ensureGoogleInit();
     final acct = await GoogleSignIn.instance.attemptLightweightAuthentication() ??
         (interactive ? await GoogleSignIn.instance.authenticate(scopeHint: [scope]) : null);
     if (acct == null) throw BackupException('سجّل الدخول بحساب Google أولاً');
@@ -110,6 +118,16 @@ class DriveBackupService {
 
   /// يتحقق من إمكانية الوصول (يطلب الإذن عند الحاجة).
   Future<void> connect() async => _api(interactive: true);
+
+  /// يتأكد فعلياً أن Drive متاح للحساب: يطلب الإذن ثم يقرأ مجلد التطبيق المخفي.
+  Future<void> verifyAccess() async {
+    final api = await _api(interactive: true);
+    try {
+      await api.files.list(spaces: 'appDataFolder', pageSize: 1, $fields: 'files(id)');
+    } catch (_) {
+      throw BackupException('تعذّر الوصول إلى Google Drive لهذا الحساب. تأكد من الاتصال بالإنترنت ومن منح الإذن.');
+    }
+  }
 
   Future<RemoteBackup> upload(Uint8List packed, {bool interactive = false}) async {
     final api = await _api(interactive: interactive);

@@ -6,12 +6,12 @@ import 'package:pdf/widgets.dart' as pw;
 
 import '../core/format.dart';
 import '../data/repository.dart';
-import 'pharmacy_info.dart';
+import 'store_info.dart';
 
 /// كشف حساب مورد بصيغة PDF عربية.
 Future<Uint8List> buildSupplierStatementPdf(
   SupplierStatement st,
-  PharmacyInfo ph, {
+  StoreInfo ph, {
   pw.Font? regular,
   pw.Font? bold,
 }) async {
@@ -32,7 +32,7 @@ Future<Uint8List> buildSupplierStatementPdf(
     textDirection: pw.TextDirection.rtl,
     margin: const pw.EdgeInsets.all(28),
     build: (ctx) => [
-      pw.Text(ph.name.isEmpty ? 'صيدلية' : ph.name, style: pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold)),
+      pw.Text(ph.name.isEmpty ? 'نسق ماركت' : ph.name, style: pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold)),
       pw.Text('كشف حساب مورد', style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold)),
       pw.Text('المورد: ${st.supplier.name}', style: const pw.TextStyle(fontSize: 12)),
       pw.Text('تاريخ الطباعة: ${dateTimeFmt(DateTime.now())}', style: const pw.TextStyle(fontSize: 10)),

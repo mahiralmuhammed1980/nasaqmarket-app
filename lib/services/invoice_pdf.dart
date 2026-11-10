@@ -6,7 +6,7 @@ import 'package:pdf/widgets.dart' as pw;
 
 import '../core/format.dart';
 import '../data/database.dart';
-import 'pharmacy_info.dart';
+import 'store_info.dart';
 
 String paymentMethodLabel(String m) => switch (m) {
       'cash' => 'نقداً',
@@ -26,7 +26,7 @@ String paymentStatusLabel(String s) => switch (s) {
 Future<Uint8List> buildInvoicePdf(
   Invoice inv,
   List<InvoiceItem> items,
-  PharmacyInfo ph, {
+  StoreInfo ph, {
   pw.Font? regular,
   pw.Font? bold,
 }) async {
@@ -56,7 +56,7 @@ Future<Uint8List> buildInvoicePdf(
               child: pw.Image(logo, fit: pw.BoxFit.contain)),
         pw.Expanded(
           child: pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
-            pw.Text(ph.name.isEmpty ? 'صيدلية' : ph.name,
+            pw.Text(ph.name.isEmpty ? 'نسق ماركت' : ph.name,
                 style: pw.TextStyle(fontSize: 18, fontWeight: pw.FontWeight.bold)),
             if (ph.address.isNotEmpty) pw.Text(ph.address, style: const pw.TextStyle(fontSize: 10)),
             if (ph.phone.isNotEmpty)
@@ -70,9 +70,10 @@ Future<Uint8List> buildInvoicePdf(
         ]),
       ]),
       pw.Divider(),
-      pw.Text('المريض: ${inv.patientName}', style: const pw.TextStyle(fontSize: 12)),
-      if (inv.patientPhone.isNotEmpty)
-        pw.Text('الهاتف: ${inv.patientPhone}', style: const pw.TextStyle(fontSize: 11)),
+      if (inv.customerName.isNotEmpty)
+        pw.Text('الزبون: ${inv.customerName}', style: const pw.TextStyle(fontSize: 12)),
+      if (inv.customerPhone.isNotEmpty)
+        pw.Text('الهاتف: ${inv.customerPhone}', style: const pw.TextStyle(fontSize: 11)),
       pw.SizedBox(height: 8),
       pw.Table(
         border: pw.TableBorder.all(color: PdfColors.grey500, width: 0.5),
@@ -95,7 +96,7 @@ Future<Uint8List> buildInvoicePdf(
           for (final it in items)
             pw.TableRow(children: [
               cell(it.productName),
-              cell(numFmt(it.quantity), align: pw.TextAlign.center),
+              cell(qtyFmt(it.quantity), align: pw.TextAlign.center),
               cell(numFmt(it.unitPrice), align: pw.TextAlign.center),
               cell(numFmt(it.lineTotal), align: pw.TextAlign.center),
             ]),
@@ -121,7 +122,7 @@ Future<Uint8List> buildInvoicePdf(
         pw.Text('ملاحظات: ${inv.notes}', style: const pw.TextStyle(fontSize: 10)),
       ],
       pw.SizedBox(height: 12),
-      pw.Center(child: pw.Text('نتمنى لكم الشفاء العاجل', style: const pw.TextStyle(fontSize: 10))),
+      pw.Center(child: pw.Text('شكراً لتسوقكم معنا', style: const pw.TextStyle(fontSize: 10))),
     ],
   ));
   return doc.save();

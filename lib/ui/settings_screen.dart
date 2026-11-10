@@ -3,11 +3,9 @@ import 'package:image_picker/image_picker.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
 import '../app_state.dart';
-import '../services/pharmacy_info.dart';
-import '../services/updater.dart';
+import '../services/store_info.dart';
 import 'common.dart';
 import 'pin_screen.dart';
-import 'shell.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -16,9 +14,9 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
-  late final name = TextEditingController(text: context.app.pharmacy.name);
-  late final phone = TextEditingController(text: context.app.pharmacy.phone);
-  late final address = TextEditingController(text: context.app.pharmacy.address);
+  late final name = TextEditingController(text: context.app.store.name);
+  late final phone = TextEditingController(text: context.app.store.phone);
+  late final address = TextEditingController(text: context.app.store.address);
   String _version = '';
 
   @override
@@ -33,24 +31,24 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (x == null || !mounted) return;
     final bytes = await x.readAsBytes();
     if (!mounted) return;
-    final p = context.app.pharmacy;
-    await context.app.savePharmacy(PharmacyInfo(name: p.name, phone: p.phone, address: p.address, logo: bytes));
+    final p = context.app.store;
+    await context.app.saveStore(StoreInfo(name: p.name, phone: p.phone, address: p.address, logo: bytes));
   }
 
   Future<void> _save() async {
-    final p = context.app.pharmacy;
-    await context.app.savePharmacy(PharmacyInfo(name: name.text.trim(), phone: phone.text.trim(), address: address.text.trim(), logo: p.logo));
+    final p = context.app.store;
+    await context.app.saveStore(StoreInfo(name: name.text.trim(), phone: phone.text.trim(), address: address.text.trim(), logo: p.logo));
     if (mounted) snack(context, 'تم الحفظ');
   }
 
   @override
   Widget build(BuildContext context) {
     final app = context.app;
-    final logo = app.pharmacy.logo;
+    final logo = app.store.logo;
     return Centered(
       maxWidth: 640,
       child: ListView(padding: const EdgeInsets.all(16), children: [
-        Text('بيانات الصيدلية', style: Theme.of(context).textTheme.titleMedium),
+        Text('بيانات المحل', style: Theme.of(context).textTheme.titleMedium),
         const SizedBox(height: 8),
         Row(children: [
           InkWell(
@@ -61,13 +59,54 @@ class _SettingsScreenState extends State<SettingsScreen> {
           const Expanded(child: Text('الشعار يظهر في الفواتير')),
           if (logo != null)
             TextButton(
-                onPressed: () => app.savePharmacy(PharmacyInfo(name: app.pharmacy.name, phone: app.pharmacy.phone, address: app.pharmacy.address)),
+                onPressed: () => app.saveStore(StoreInfo(name: app.store.name, phone: app.store.phone, address: app.store.address)),
                 child: const Text('إزالة')),
         ]),
-        formField('اسم الصيدلية', name),
+        formField('اسم المحل', name),
         formField('الهاتف', phone, type: TextInputType.phone),
         formField('العنوان', address),
         FilledButton(onPressed: _save, child: const Text('حفظ')),
+        const Divider(height: 40),
+        Text('الميزات (${app.cfg.type.label})', style: Theme.of(context).textTheme.titleMedium),
+        SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          title: const Text('المقاس واللون'),
+          subtitle: const Text('للألبسة والأحذية: كل توليفة صنف مستقل'),
+          value: app.cfg.variants,
+          onChanged: (v) => app.saveConfig(app.cfg.copyWith(variants: v)),
+        ),
+        SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          title: const Text('كميات عشرية (البيع بالوزن)'),
+          subtitle: const Text('مثل 0.5 كغ أو 2.75 متر'),
+          value: app.cfg.decimal,
+          onChanged: (v) => app.saveConfig(app.cfg.copyWith(decimal: v)),
+        ),
+        SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          title: const Text('تاريخ الصلاحية'),
+          subtitle: const Text('اختياري لكل صنف؛ يفعّل تنبيهات الانتهاء'),
+          value: app.cfg.expiry,
+          onChanged: (v) => app.saveConfig(app.cfg.copyWith(expiry: v)),
+        ),
+        ListTile(
+          contentPadding: EdgeInsets.zero,
+          leading: const Icon(Icons.payments_outlined),
+          title: const Text('رمز العملة'),
+          subtitle: Text(app.cfg.currency),
+          onTap: () async {
+            final c = TextEditingController(text: app.cfg.currency);
+            final v = await showDialog<String>(
+              context: context,
+              builder: (ctx) => AlertDialog(
+                title: const Text('رمز العملة'),
+                content: TextField(controller: c, autofocus: true),
+                actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('إلغاء')), FilledButton(onPressed: () => Navigator.pop(ctx, c.text.trim()), child: const Text('حفظ'))],
+              ),
+            );
+            if (v != null && v.isNotEmpty) await app.saveConfig(app.cfg.copyWith(currency: v));
+          },
+        ),
         const Divider(height: 40),
         Text('الأمان', style: Theme.of(context).textTheme.titleMedium),
         ListTile(
@@ -88,24 +127,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
         Text('حول التطبيق', style: Theme.of(context).textTheme.titleMedium),
         ListTile(leading: const Icon(Icons.info_outline), title: const Text('الإصدار'), subtitle: Text(_version)),
         ListTile(
-          leading: const Icon(Icons.verified_user_outlined),
-          title: const Text('الحساب المفعّل'),
-          subtitle: Text(app.licenseInfo?.email ?? '—'),
+          leading: const Icon(Icons.account_circle_outlined),
+          title: const Text('حساب Google'),
+          subtitle: Text(app.account?.email ?? '—'),
         ),
         ListTile(
-          leading: const Icon(Icons.system_update),
-          title: const Text('التحقق من وجود تحديث'),
+          leading: const Icon(Icons.logout),
+          title: const Text('تسجيل الخروج'),
+          subtitle: const Text('تبقى البيانات على الهاتف؛ يلزم تسجيل الدخول مجدداً للمتابعة'),
           onTap: () async {
-            try {
-              final u = await UpdateService().check(throwOnError: true);
-              if (!context.mounted) return;
-              if (u == null) {
-                snack(context, 'أنت تستخدم أحدث إصدار');
-              } else {
-                showUpdateDialog(context, u);
-              }
-            } catch (_) {
-              if (context.mounted) snack(context, 'تعذّر التحقق. تأكد من الاتصال بالإنترنت.', error: true);
+            if (await confirm(context, 'تسجيل الخروج؟', body: 'سيُرفع الآن نسخة احتياطية إلى Drive قبل الخروج إن أمكن.', ok: 'خروج')) {
+              try {
+                await app.backupToDrive();
+              } catch (_) {}
+              await app.signOut();
             }
           },
         ),

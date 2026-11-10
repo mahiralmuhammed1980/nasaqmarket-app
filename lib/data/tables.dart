@@ -1,25 +1,6 @@
 import 'package:drift/drift.dart';
 
-// ───────── الكتالوج المرجعي (يقبل الاستيراد والتحديث) ─────────
-
-class CatalogCompanies extends Table {
-  IntColumn get id => integer().autoIncrement()();
-  TextColumn get name => text().unique()();
-  TextColumn get country => text().withDefault(const Constant(''))();
-}
-
-class CatalogDrugs extends Table {
-  IntColumn get id => integer().autoIncrement()();
-  TextColumn get barcode => text().nullable().unique()();
-  TextColumn get tradeName => text()();
-  TextColumn get scientificName => text().withDefault(const Constant(''))();
-  TextColumn get category => text().withDefault(const Constant(''))();
-  TextColumn get unit => text().withDefault(const Constant(''))();
-  IntColumn get companyId => integer().nullable().references(CatalogCompanies, #id)();
-  IntColumn get referencePrice => integer().nullable()();
-}
-
-// ───────── بيانات الصيدلية (لا يمسّها استيراد الكتالوج أبداً) ─────────
+// ───────── بيانات المحل ─────────
 
 class Suppliers extends Table {
   IntColumn get id => integer().autoIncrement()();
@@ -37,22 +18,22 @@ class Suppliers extends Table {
 
 class Products extends Table {
   IntColumn get id => integer().autoIncrement()();
-  IntColumn get catalogDrugId => integer().nullable().references(CatalogDrugs, #id)();
   TextColumn get name => text()();
-  TextColumn get scientificName => text().withDefault(const Constant(''))();
   TextColumn get category => text().withDefault(const Constant(''))();
-  TextColumn get unit => text().withDefault(const Constant('علبة'))();
+  TextColumn get unit => text().withDefault(const Constant('قطعة'))();
   IntColumn get salePrice => integer().withDefault(const Constant(0))();
   IntColumn get costPrice => integer().withDefault(const Constant(0))();
-  IntColumn get minStock => integer().withDefault(const Constant(0))();
+  /// الكميات عشرية (كغ/متر...) وتُقرَّب إلى 3 منازل عند كل كتابة.
+  RealColumn get minStock => real().withDefault(const Constant(0))();
   TextColumn get barcode => text().nullable()();
   IntColumn get defaultSupplierId => integer().nullable().references(Suppliers, #id)();
   TextColumn get notes => text().withDefault(const Constant(''))();
   BoolColumn get archived => boolean().withDefault(const Constant(false))();
-  /// الشركة المصنّعة (من قائمة الشركات).
-  IntColumn get companyId => integer().nullable().references(CatalogCompanies, #id)();
-  /// دواء مقيّد: لا يُباع إلا بوصفة وتُسجَّل بياناتها في سجل المقيّدة.
-  BoolColumn get isRestricted => boolean().withDefault(const Constant(false))();
+  /// متغيّرات (ألبسة/أحذية): كل مقاس/لون صنف مستقل له باركوده ومخزونه.
+  TextColumn get size => text().withDefault(const Constant(''))();
+  TextColumn get color => text().withDefault(const Constant(''))();
+  /// تاريخ الصلاحية اختياري: عند التفعيل يُطلب في الدفعات ويُنبَّه قبل الانتهاء.
+  BoolColumn get trackExpiry => boolean().withDefault(const Constant(false))();
 }
 
 @DataClassName('StockBatch')
@@ -60,7 +41,7 @@ class Batches extends Table {
   IntColumn get id => integer().autoIncrement()();
   IntColumn get productId => integer().references(Products, #id)();
   TextColumn get batchNo => text().withDefault(const Constant(''))();
-  IntColumn get quantity => integer().withDefault(const Constant(0))();
+  RealColumn get quantity => real().withDefault(const Constant(0))();
   DateTimeColumn get expiry => dateTime().nullable()();
   IntColumn get cost => integer().withDefault(const Constant(0))();
   TextColumn get location => text().withDefault(const Constant(''))();
@@ -82,7 +63,7 @@ class PurchaseOrderItems extends Table {
   IntColumn get id => integer().autoIncrement()();
   IntColumn get orderId => integer().references(PurchaseOrders, #id)();
   IntColumn get productId => integer().references(Products, #id)();
-  IntColumn get quantity => integer()();
+  RealColumn get quantity => real()();
   IntColumn get unitCost => integer()();
   TextColumn get batchNo => text().withDefault(const Constant(''))();
   DateTimeColumn get expiry => dateTime().nullable()();
@@ -92,8 +73,8 @@ class Invoices extends Table {
   IntColumn get id => integer().autoIncrement()();
   TextColumn get number => text().unique()();
   DateTimeColumn get createdAt => dateTime()();
-  TextColumn get patientName => text()();
-  TextColumn get patientPhone => text().withDefault(const Constant(''))();
+  TextColumn get customerName => text().withDefault(const Constant(''))();
+  TextColumn get customerPhone => text().withDefault(const Constant(''))();
   IntColumn get subtotal => integer()();
   IntColumn get discount => integer().withDefault(const Constant(0))();
   IntColumn get total => integer()();
@@ -110,7 +91,7 @@ class InvoiceItems extends Table {
   IntColumn get invoiceId => integer().references(Invoices, #id)();
   IntColumn get productId => integer().nullable().references(Products, #id)();
   TextColumn get productName => text()();
-  IntColumn get quantity => integer()();
+  RealColumn get quantity => real()();
   IntColumn get unitPrice => integer()();
   IntColumn get unitCost => integer().withDefault(const Constant(0))();
   IntColumn get lineTotal => integer()();
@@ -121,7 +102,7 @@ class InvoiceItemBatches extends Table {
   IntColumn get id => integer().autoIncrement()();
   IntColumn get invoiceItemId => integer().references(InvoiceItems, #id)();
   IntColumn get batchId => integer().references(Batches, #id)();
-  IntColumn get quantity => integer()();
+  RealColumn get quantity => real()();
 }
 
 class AppSettings extends Table {
@@ -159,22 +140,4 @@ class CashClosings extends Table {
   IntColumn get countedAmount => integer()();
   IntColumn get difference => integer()();
   TextColumn get note => text().withDefault(const Constant(''))();
-}
-
-// ───────── سجل الأدوية المقيّدة ─────────
-
-class RestrictedRecords extends Table {
-  IntColumn get id => integer().autoIncrement()();
-  DateTimeColumn get createdAt => dateTime()();
-  IntColumn get invoiceId => integer().nullable()();
-  TextColumn get invoiceNumber => text().withDefault(const Constant(''))();
-  IntColumn get productId => integer().nullable()();
-  TextColumn get productName => text()();
-  IntColumn get quantity => integer()();
-  TextColumn get prescriptionNo => text()();
-  TextColumn get doctorName => text()();
-  TextColumn get patientName => text()();
-  TextColumn get patientNationalId => text()();
-  /// تُعلَّم عند حذف الفاتورة؛ يبقى السجل للمراجعة.
-  BoolColumn get voided => boolean().withDefault(const Constant(false))();
 }

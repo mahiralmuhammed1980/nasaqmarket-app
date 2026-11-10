@@ -1,4 +1,4 @@
-/// نتيجة تحليل باركود GS1 (DataMatrix) الموجود على عبوات الأدوية.
+/// نتيجة تحليل باركود GS1 (DataMatrix) الموجود على بعض عبوات المواد الغذائية.
 class Gs1Data {
   final String? gtin;
   final String? batch;

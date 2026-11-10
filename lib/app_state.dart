@@ -7,56 +7,92 @@ import 'data/database.dart';
 import 'data/repository.dart';
 import 'services/backup.dart';
 import 'services/kv_store.dart';
-import 'services/license.dart';
-import 'services/pharmacy_info.dart';
+import 'core/business.dart';
+import 'core/format.dart';
+import 'services/auth.dart';
+import 'services/store_info.dart';
 import 'services/pin.dart';
 
-/// تجاوز التفعيل لأغراض التطوير فقط (يعمل في وضع debug فقط ولا أثر له في APK الإصدار).
-const _devBypass = bool.fromEnvironment('DEV_BYPASS_LICENSE');
+/// تجاوز تسجيل الدخول لأغراض التطوير فقط (يعمل في وضع debug فقط ولا أثر له في نسخة الإصدار).
+const _devBypass = bool.fromEnvironment('DEV_BYPASS_LOGIN');
 
 class AppController extends ChangeNotifier {
   late AppDatabase db;
   late Repository repo;
   final KvStore kv;
   final AppDatabase? _injectedDb;
-  final bool _forceActivated;
+  final bool _forceSignedIn;
+  final BusinessType? _presetType;
 
-  /// للاختبارات: يمكن حقن قاعدة بيانات وتخزين وتجاوز التفعيل.
-  AppController({AppDatabase? database, KvStore? kvStore, @visibleForTesting bool forceActivated = false})
-      : kv = kvStore ?? SecureKv(),
+  /// للاختبارات: يمكن حقن قاعدة بيانات وتخزين وتجاوز تسجيل الدخول وتحديد نوع النشاط مسبقاً.
+  AppController({
+    AppDatabase? database,
+    KvStore? kvStore,
+    @visibleForTesting bool forceSignedIn = false,
+    @visibleForTesting BusinessType? presetType,
+  })  : kv = kvStore ?? SecureKv(),
         _injectedDb = database,
-        _forceActivated = forceActivated;
-  late final LicenseService license = LicenseService(LicenseVault(kv));
-  late final PinManager pin = PinManager(kv);
+        _forceSignedIn = forceSignedIn,
+        _presetType = presetType;
   final DriveBackupService drive = DriveBackupService();
+  late final AuthService auth = AuthService(kv, drive);
+  late final PinManager pin = PinManager(kv);
 
   bool ready = false;
-  LocalLicense? licenseInfo;
+  Account? account;
+  StoreConfig? config;
   bool pinRequired = false;
   bool unlocked = false;
-  PharmacyInfo pharmacy = const PharmacyInfo();
+  StoreInfo store = const StoreInfo();
 
   bool get devBypass => kDebugMode && _devBypass;
-  bool get activated => licenseInfo != null || devBypass || _forceActivated;
+  bool get signedIn => account != null || devBypass || _forceSignedIn;
+  bool get onboarded => config != null;
+
+  /// إعدادات المحل الحالية (نوع افتراضي «عام» قبل الإعداد الأول).
+  StoreConfig get cfg => config ?? StoreConfig.forType(BusinessType.general);
 
   Future<void> init() async {
     db = _injectedDb ?? openAppDatabase();
     repo = Repository(db);
     try {
-      licenseInfo = await license.current();
+      account = await auth.current();
     } catch (_) {
-      licenseInfo = null;
+      account = null;
     }
     pinRequired = await pin.isSet;
     unlocked = !pinRequired;
-    pharmacy = await PharmacyInfo.load(db);
+    await _loadStore();
+    if (_presetType != null && config == null) {
+      await saveConfig(StoreConfig.forType(_presetType));
+    }
     ready = true;
     notifyListeners();
     _autoBackup();
   }
 
-  void onActivated(LocalLicense l) {
-    licenseInfo = l;
+  Future<void> _loadStore() async {
+    config = await StoreConfig.load(db);
+    store = await StoreInfo.load(db);
+    kCurrency = cfg.currency;
+  }
+
+  /// تسجيل الدخول بـ Google (يتحقق من Drive). يرمي [AuthException].
+  Future<void> signIn() async {
+    account = await auth.signIn();
+    notifyListeners();
+  }
+
+  Future<void> signOut() async {
+    await auth.signOut();
+    account = null;
+    notifyListeners();
+  }
+
+  Future<void> saveConfig(StoreConfig c) async {
+    await c.save(db);
+    config = c;
+    kCurrency = c.currency;
     notifyListeners();
   }
 
@@ -86,9 +122,9 @@ class AppController extends ChangeNotifier {
     }
   }
 
-  Future<void> savePharmacy(PharmacyInfo p) async {
+  Future<void> saveStore(StoreInfo p) async {
     await p.save(db);
-    pharmacy = p;
+    store = p;
     notifyListeners();
   }
 
@@ -124,7 +160,8 @@ class AppController extends ChangeNotifier {
     return v == null ? null : DateTime.tryParse(v);
   }
 
-  Future<bool> driveBackupEnabled() async => (await db.getSetting('drive_backup')) == '1';
+  /// النسخ التلقائي على Drive مفعّل افتراضياً (التسجيل بـ Google إلزامي)، ويمكن إيقافه.
+  Future<bool> driveBackupEnabled() async => (await db.getSetting('drive_backup')) != '0';
 
   Future<void> setDriveBackup(bool on) async {
     await db.setSetting('drive_backup', on ? '1' : '0');
@@ -164,7 +201,7 @@ class AppController extends ChangeNotifier {
     await file.writeAsBytes(raw, flush: true);
     db = openAppDatabase();
     repo = Repository(db);
-    pharmacy = await PharmacyInfo.load(db);
+    await _loadStore();
     notifyListeners();
   }
 }

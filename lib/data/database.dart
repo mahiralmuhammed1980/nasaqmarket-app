@@ -4,17 +4,14 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'dart:io';
 
-import 'schema_versions.dart';
 import 'tables.dart';
 
 part 'database.g.dart';
 
 /// رقم مخطط قاعدة البيانات. ارفعه عند كل تعديل في الجداول وأضف خطوة في [onUpgrade].
-const int kSchemaVersion = 2;
+const int kSchemaVersion = 1;
 
 @DriftDatabase(tables: [
-  CatalogCompanies,
-  CatalogDrugs,
   Suppliers,
   Products,
   Batches,
@@ -26,7 +23,6 @@ const int kSchemaVersion = 2;
   AppSettings,
   CashEntries,
   CashClosings,
-  RestrictedRecords,
 ])
 class AppDatabase extends _$AppDatabase {
   AppDatabase(super.e);
@@ -43,21 +39,10 @@ class AppDatabase extends _$AppDatabase {
           await m.createAll();
           await _createIndexes();
         },
-        // ترحيل خطوة بخطوة يحفظ بيانات الزبائن. عند رفع kSchemaVersion:
-        //  1) عدّل tables.dart  2) dart run drift_dev schema dump ... drift_schemas/drift_schema_vN.json
-        //  3) dart run drift_dev schema steps drift_schemas lib/data/schema_versions.dart
-        //  4) أضف الخطوة هنا  5) dart run drift_dev schema generate drift_schemas test/generated_migrations
+        // عند رفع kSchemaVersion مستقبلاً: عدّل tables.dart ثم أضف خطوة ترحيل هنا
+        // (راجع drift: m.addColumn / m.createTable) واحتفظ بنسخة المخطط في drift_schemas
+        // لاختبار الترحيل. الإصدار الأول لا يحتاج ترحيلاً.
         onUpgrade: (m, from, to) async {
-          await stepByStep(
-            from1To2: (m, schema) async {
-              await m.addColumn(schema.suppliers, schema.suppliers.openingBalance);
-              await m.addColumn(schema.products, schema.products.companyId);
-              await m.addColumn(schema.products, schema.products.isRestricted);
-              await m.createTable(schema.cashEntries);
-              await m.createTable(schema.cashClosings);
-              await m.createTable(schema.restrictedRecords);
-            },
-          )(m, from, to);
           await _createIndexes();
         },
         beforeOpen: (details) async {
@@ -78,8 +63,6 @@ class AppDatabase extends _$AppDatabase {
         'CREATE INDEX IF NOT EXISTS idx_cash_created ON cash_entries(created_at)');
     await customStatement(
         'CREATE INDEX IF NOT EXISTS idx_cash_supplier ON cash_entries(supplier_id)');
-    await customStatement(
-        'CREATE INDEX IF NOT EXISTS idx_restricted_created ON restricted_records(created_at)');
   }
 
   // ───────── إعدادات ─────────
@@ -104,7 +87,7 @@ class AppDatabase extends _$AppDatabase {
 
 Future<File> databaseFile() async {
   final dir = await getApplicationDocumentsDirectory();
-  return File(p.join(dir.path, 'nasaq_pharma.sqlite'));
+  return File(p.join(dir.path, 'nasaq_market.sqlite'));
 }
 
 AppDatabase openAppDatabase() =>

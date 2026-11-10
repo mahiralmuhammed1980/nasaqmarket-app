@@ -5,10 +5,8 @@ import '../app_state.dart';
 import '../core/format.dart';
 import '../core/gs1.dart';
 import '../data/database.dart';
-import '../data/importers.dart';
 import '../data/repository.dart';
 import 'common.dart';
-import 'companies_screen.dart';
 import 'scanner.dart';
 
 class InventoryScreen extends StatefulWidget {
@@ -19,9 +17,8 @@ class InventoryScreen extends StatefulWidget {
 
 class _InventoryScreenState extends State<InventoryScreen> {
   String _q = '';
-  String _filter = 'all'; // all | low | expiring | out | restricted
-  int? _companyId;
-  String _companyName = '';
+  String _filter = 'all'; // all | low | expiring | out
+  String? _category;
 
   Future<void> _scan() async {
     final raw = await scanBarcode(context);
@@ -40,8 +37,23 @@ class _InventoryScreenState extends State<InventoryScreen> {
     Navigator.push(context, MaterialPageRoute(builder: (_) => ProductDetailPage(productId: p.id, scanned: gs)));
   }
 
+  Future<void> _pickCategory() async {
+    final cats = await context.repo.categories();
+    if (!mounted) return;
+    final picked = await showModalBottomSheet<String>(
+      context: context,
+      builder: (_) => SafeArea(
+        child: cats.isEmpty
+            ? const SizedBox(height: 160, child: EmptyState(Icons.category_outlined, 'لا توجد تصنيفات بعد. أضف تصنيفاً عند إنشاء الصنف.'))
+            : ListView(shrinkWrap: true, children: [for (final c in cats) ListTile(title: Text(c), onTap: () => Navigator.pop(context, c))]),
+      ),
+    );
+    if (picked != null) setState(() => _category = picked);
+  }
+
   @override
   Widget build(BuildContext context) {
+    final cfg = context.app.cfg;
     return Scaffold(
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const ProductFormPage())),
@@ -50,14 +62,19 @@ class _InventoryScreenState extends State<InventoryScreen> {
       ),
       body: Column(children: [
         SearchBox(
-          hint: 'ابحث بالاسم أو الاسم العلمي أو الباركود',
+          hint: cfg.variants ? 'ابحث بالاسم أو المقاس أو اللون أو الباركود' : 'ابحث بالاسم أو التصنيف أو الباركود',
           onChanged: (v) => setState(() => _q = v),
           trailing: IconButton.filledTonal(onPressed: _scan, icon: const Icon(Icons.qr_code_scanner), tooltip: 'مسح باركود'),
         ),
         SizedBox(
           height: 48,
           child: ListView(scrollDirection: Axis.horizontal, padding: const EdgeInsets.symmetric(horizontal: 12), children: [
-            for (final (k, l) in [('all', 'الكل'), ('low', 'منخفض'), ('out', 'نفد'), ('expiring', 'قريب الانتهاء'), ('restricted', 'مقيّد بوصفة')])
+            for (final (k, l) in [
+              ('all', 'الكل'),
+              ('low', 'منخفض'),
+              ('out', 'نفد'),
+              if (cfg.expiry) ('expiring', 'قريب الانتهاء'),
+            ])
               Padding(
                 padding: const EdgeInsetsDirectional.only(end: 8),
                 child: ChoiceChip(label: Text(l), selected: _filter == k, onSelected: (_) => setState(() => _filter = k)),
@@ -65,40 +82,29 @@ class _InventoryScreenState extends State<InventoryScreen> {
             Padding(
               padding: const EdgeInsetsDirectional.only(end: 8),
               child: InputChip(
-                avatar: const Icon(Icons.factory_outlined, size: 18),
-                label: Text(_companyId == null ? 'كل الشركات' : _companyName),
-                selected: _companyId != null,
-                onDeleted: _companyId == null ? null : () => setState(() => _companyId = null),
-                onPressed: () async {
-                  final picked = await showModalBottomSheet<CompanyInfo>(
-                    context: context,
-                    isScrollControlled: true,
-                    builder: (_) => const _CompanyPicker(),
-                  );
-                  if (picked != null) setState(() {
-                    _companyId = picked.company.id;
-                    _companyName = picked.company.name;
-                  });
-                },
+                avatar: const Icon(Icons.category_outlined, size: 18),
+                label: Text(_category ?? 'كل التصنيفات'),
+                selected: _category != null,
+                onDeleted: _category == null ? null : () => setState(() => _category = null),
+                onPressed: _pickCategory,
               ),
             ),
           ]),
         ),
         Expanded(
           child: StreamBuilder<List<ProductStock>>(
-            stream: context.repo.watchProducts(query: _q, companyId: _companyId),
+            stream: context.repo.watchProducts(query: _q, category: _category),
             builder: (ctx, snap) {
               if (!snap.hasData) return const Center(child: CircularProgressIndicator());
               var items = snap.data!;
               final soon = DateTime.now().add(const Duration(days: 90));
               items = switch (_filter) {
                 'low' => items.where((p) => p.low && p.stock > 0).toList(),
-                'out' => items.where((p) => p.stock == 0).toList(),
+                'out' => items.where((p) => p.stock <= 0).toList(),
                 'expiring' => items.where((p) => p.nearestExpiry != null && p.nearestExpiry!.isBefore(soon)).toList(),
-                'restricted' => items.where((p) => p.product.isRestricted).toList(),
                 _ => items,
               };
-              if (items.isEmpty) return const EmptyState(Icons.inventory_2_outlined, 'لا توجد أصناف مطابقة.\nأضف صنفاً جديداً أو استورد الجرد من تبويب «البيانات».');
+              if (items.isEmpty) return const EmptyState(Icons.inventory_2_outlined, 'لا توجد أصناف مطابقة.\nأضف صنفاً جديداً أو استورد الجرد من «المزيد ← البيانات».');
               return Centered(
                 child: ListView.separated(
                   padding: const EdgeInsets.only(bottom: 88),
@@ -106,23 +112,20 @@ class _InventoryScreenState extends State<InventoryScreen> {
                   separatorBuilder: (_, __) => const Divider(height: 1),
                   itemBuilder: (ctx, i) {
                     final it = items[i];
-                    final expSoon = it.nearestExpiry != null && it.nearestExpiry!.isBefore(soon);
+                    final expSoon = it.product.trackExpiry && it.nearestExpiry != null && it.nearestExpiry!.isBefore(soon);
                     return ListTile(
-                      title: Row(children: [
-                        Flexible(child: Text(it.product.name)),
-                        if (it.product.isRestricted) const Padding(padding: EdgeInsetsDirectional.only(start: 6), child: Tooltip(message: 'مقيّد بوصفة', child: Icon(Icons.lock_outline, size: 16, color: Colors.deepOrange))),
-                      ]),
+                      title: Text(it.product.displayName),
                       subtitle: Text([
-                        if (it.product.scientificName.isNotEmpty) it.product.scientificName,
+                        if (it.product.category.isNotEmpty) it.product.category,
                         'السعر ${money(it.product.salePrice)}',
-                        if (it.nearestExpiry != null) 'أقرب انتهاء ${dateFmt(it.nearestExpiry)}',
+                        if (it.product.trackExpiry && it.nearestExpiry != null) 'أقرب انتهاء ${dateFmt(it.nearestExpiry)}',
                       ].join(' • ')),
                       trailing: Column(mainAxisAlignment: MainAxisAlignment.center, crossAxisAlignment: CrossAxisAlignment.end, children: [
-                        Text('${it.stock}',
+                        Text(qtyFmt(it.stock),
                             style: TextStyle(
                                 fontSize: 18,
                                 fontWeight: FontWeight.bold,
-                                color: it.stock == 0 ? Colors.red : (it.low ? Colors.orange.shade800 : null))),
+                                color: it.stock <= 0 ? Colors.red : (it.low ? Colors.orange.shade800 : null))),
                         if (expSoon) Icon(Icons.event_busy, size: 16, color: Colors.deepOrange.shade400),
                       ]),
                       onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => ProductDetailPage(productId: it.product.id))),
@@ -140,6 +143,9 @@ class _InventoryScreenState extends State<InventoryScreen> {
 
 // ═════════════ نموذج الصنف ═════════════
 
+List<String> _splitList(String s) =>
+    s.split(RegExp(r'[,،;\n]')).map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
+
 class ProductFormPage extends StatefulWidget {
   final Product? product;
   final String? initialBarcode;
@@ -151,45 +157,30 @@ class ProductFormPage extends StatefulWidget {
 class _ProductFormPageState extends State<ProductFormPage> {
   final _form = GlobalKey<FormState>();
   late final name = TextEditingController(text: widget.product?.name);
-  late final sci = TextEditingController(text: widget.product?.scientificName);
   late final cat = TextEditingController(text: widget.product?.category);
-  late final unit = TextEditingController(text: widget.product?.unit ?? 'علبة');
+  late final unit = TextEditingController(text: widget.product?.unit ?? context.appRead.cfg.type.defaultUnit);
   late final sale = TextEditingController(text: widget.product == null ? '' : '${widget.product!.salePrice}');
   late final cost = TextEditingController(text: widget.product == null ? '' : '${widget.product!.costPrice}');
-  late final minStock = TextEditingController(text: widget.product == null ? '0' : '${widget.product!.minStock}');
+  late final minStock = TextEditingController(text: widget.product == null ? '0' : qtyFmt(widget.product!.minStock));
   late final barcode = TextEditingController(text: widget.product?.barcode ?? widget.initialBarcode);
   late final notes = TextEditingController(text: widget.product?.notes);
-  int? _catalogId;
+  late final size = TextEditingController(text: widget.product?.size);
+  late final color = TextEditingController(text: widget.product?.color);
+  // مولّد المتغيّرات (للصنف الجديد فقط)
+  final _sizes = <String>{};
+  final _colors = <String>{};
+  final extraSizes = TextEditingController();
+  final extraColors = TextEditingController();
+  final initialQty = TextEditingController();
   int? _supplierId;
-  int? _companyId;
-  bool _restricted = false;
+  late bool _trackExpiry = widget.product?.trackExpiry ?? context.appRead.cfg.expiry;
+
+  bool get _isNew => widget.product == null;
 
   @override
   void initState() {
     super.initState();
-    _catalogId = widget.product?.catalogDrugId;
     _supplierId = widget.product?.defaultSupplierId;
-    _companyId = widget.product?.companyId;
-    _restricted = widget.product?.isRestricted ?? false;
-  }
-
-  Future<void> _pickCatalog() async {
-    final d = await showModalBottomSheet<CatalogDrug>(
-      context: context,
-      isScrollControlled: true,
-      builder: (_) => _CatalogPicker(importer: CatalogImporter(context.app.db)),
-    );
-    if (d == null) return;
-    setState(() {
-      _catalogId = d.id;
-      name.text = d.tradeName;
-      if (d.scientificName.isNotEmpty) sci.text = d.scientificName;
-      if (d.category.isNotEmpty) cat.text = d.category;
-      if (d.unit.isNotEmpty) unit.text = d.unit;
-      if (d.barcode != null) barcode.text = d.barcode!;
-      if (d.companyId != null) _companyId = d.companyId;
-      if (d.referencePrice != null && sale.text.isEmpty) sale.text = '${d.referencePrice}';
-    });
   }
 
   Future<void> _scan() async {
@@ -198,34 +189,68 @@ class _ProductFormPageState extends State<ProductFormPage> {
     setState(() => barcode.text = parseGs1(raw).gtin ?? raw);
   }
 
+  List<String> get _allSizes => {..._sizes, ..._splitList(extraSizes.text)}.toList();
+  List<String> get _allColors => {..._colors, ..._splitList(extraColors.text)}.toList();
+  int get _variantCount {
+    final s = _allSizes.length, c = _allColors.length;
+    return (s == 0 ? 1 : s) * (c == 0 ? 1 : c);
+  }
+
   Future<void> _save() async {
     if (!_form.currentState!.validate()) return;
+    final cfg = context.appRead.cfg;
+    final repo = context.repoRead;
+    final nav = Navigator.of(context);
     final bc = normalizeDigits(barcode.text).trim();
+    final generating = _isNew && cfg.variants && (_allSizes.isNotEmpty || _allColors.isNotEmpty);
     if (bc.isNotEmpty) {
-      final dup = await context.repo.productByBarcode(bc);
+      if (generating && _variantCount > 1) {
+        snack(context, 'لكل متغيّر باركود مستقل: اترك الباركود فارغاً الآن وأضفه لكل مقاس/لون بعد الحفظ.', error: true);
+        return;
+      }
+      final dup = await repo.productByBarcode(bc);
       if (dup != null && dup.id != widget.product?.id) {
         if (!mounted) return;
-        snack(context, 'الباركود مستخدم للصنف: ${dup.name}', error: true);
+        snack(context, 'الباركود مستخدم للصنف: ${dup.displayName}', error: true);
         return;
       }
     }
-    await context.repo.saveProduct(ProductsCompanion(
-      id: widget.product == null ? const Value.absent() : Value(widget.product!.id),
-      catalogDrugId: Value(_catalogId),
+    final base = ProductsCompanion(
+      id: _isNew ? const Value.absent() : Value(widget.product!.id),
       name: Value(name.text.trim()),
-      scientificName: Value(sci.text.trim()),
       category: Value(cat.text.trim()),
-      unit: Value(unit.text.trim().isEmpty ? 'علبة' : unit.text.trim()),
+      unit: Value(unit.text.trim().isEmpty ? cfg.type.defaultUnit : unit.text.trim()),
       salePrice: Value(parseInt(sale.text) ?? 0),
       costPrice: Value(parseInt(cost.text) ?? 0),
-      minStock: Value(parseInt(minStock.text) ?? 0),
+      minStock: Value(parseQty(minStock.text) ?? 0),
       barcode: Value(bc.isEmpty ? null : bc),
       defaultSupplierId: Value(_supplierId),
-      companyId: Value(_companyId),
-      isRestricted: Value(_restricted),
+      trackExpiry: Value(cfg.expiry && _trackExpiry),
       notes: Value(notes.text.trim()),
-    ));
-    if (mounted) Navigator.pop(context);
+    );
+    if (generating) {
+      await repo.createVariants(
+        base: base,
+        sizes: _allSizes,
+        colors: _allColors,
+        initialQty: parseQty(initialQty.text) ?? 0,
+      );
+    } else {
+      final id = await repo.saveProduct(base.copyWith(
+        size: Value(cfg.variants ? size.text.trim() : ''),
+        color: Value(cfg.variants ? color.text.trim() : ''),
+      ));
+      final q = parseQty(initialQty.text) ?? 0;
+      if (_isNew && q > 0) {
+        await repo.saveBatch(BatchesCompanion.insert(
+          productId: id,
+          quantity: Value(q),
+          cost: Value(parseInt(cost.text) ?? 0),
+          notes: const Value('رصيد افتتاحي'),
+        ));
+      }
+    }
+    if (mounted) nav.pop();
   }
 
   String? _num(String? v) {
@@ -234,10 +259,30 @@ class _ProductFormPageState extends State<ProductFormPage> {
     return (n == null || n < 0) ? 'أدخل رقماً صحيحاً' : null;
   }
 
+  Widget _menu(List<String> items, void Function(String) pick, {String tooltip = 'اقتراحات'}) => items.isEmpty
+      ? const SizedBox.shrink()
+      : PopupMenuButton<String>(icon: const Icon(Icons.arrow_drop_down), tooltip: tooltip, onSelected: pick, itemBuilder: (_) => [for (final i in items) PopupMenuItem(value: i, child: Text(i))]);
+
+  Widget _chips(String title, List<String> presets, Set<String> selected) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 6),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(title, style: Theme.of(context).textTheme.labelLarge),
+          Wrap(spacing: 6, children: [
+            for (final p in presets)
+              FilterChip(
+                label: Text(p),
+                selected: selected.contains(p),
+                onSelected: (v) => setState(() => v ? selected.add(p) : selected.remove(p)),
+              ),
+          ]),
+        ]),
+      );
+
   @override
   Widget build(BuildContext context) {
+    final cfg = context.app.cfg;
     return Scaffold(
-      appBar: AppBar(title: Text(widget.product == null ? 'صنف جديد' : 'تعديل الصنف'), actions: [
+      appBar: AppBar(title: Text(_isNew ? 'صنف جديد' : 'تعديل الصنف'), actions: [
         TextButton.icon(onPressed: _save, icon: const Icon(Icons.check), label: const Text('حفظ')),
       ]),
       body: Centered(
@@ -245,16 +290,45 @@ class _ProductFormPageState extends State<ProductFormPage> {
         child: Form(
           key: _form,
           child: ListView(padding: const EdgeInsets.all(16), children: [
-            OutlinedButton.icon(onPressed: _pickCatalog, icon: const Icon(Icons.menu_book), label: const Text('اختيار من كتالوج الأدوية')),
-            formField('الاسم التجاري *', name, required: true),
-            formField('الاسم العلمي', sci),
-            Row(children: [Expanded(child: formField('التصنيف', cat)), const SizedBox(width: 8), Expanded(child: formField('الوحدة', unit))]),
+            formField('اسم الصنف *', name, required: true),
+            FutureBuilder<List<String>>(
+              future: context.repo.categories(),
+              builder: (ctx, s) {
+                final all = {...cfg.type.categoryHints, ...?s.data}.toList();
+                return Row(children: [
+                  Expanded(child: formField('التصنيف', cat, suffix: _menu(all, (v) => setState(() => cat.text = v)))),
+                  const SizedBox(width: 8),
+                  Expanded(child: formField('الوحدة', unit, suffix: _menu(cfg.type.units, (v) => setState(() => unit.text = v)))),
+                ]);
+              },
+            ),
+            if (cfg.variants && !_isNew) Row(children: [Expanded(child: formField('المقاس', size)), const SizedBox(width: 8), Expanded(child: formField('اللون', color))]),
+            if (cfg.variants && _isNew)
+              Card(
+                margin: const EdgeInsets.symmetric(vertical: 8),
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text('المقاسات والألوان', style: Theme.of(context).textTheme.titleSmall),
+                    const Text('اختر ما يتوفر لتُنشأ كل التوليفات كأصناف مستقلة (لكل منها مخزونه وباركوده).'),
+                    if (cfg.type.sizePresets.isNotEmpty) _chips('المقاسات', cfg.type.sizePresets, _sizes),
+                    formField('مقاسات أخرى (افصل بفاصلة)', extraSizes, onChanged: (_) => setState(() {})),
+                    if (cfg.type.colorPresets.isNotEmpty) _chips('الألوان', cfg.type.colorPresets, _colors),
+                    formField('ألوان أخرى (افصل بفاصلة)', extraColors, onChanged: (_) => setState(() {})),
+                    if (_variantCount > 1) Text('سيُنشأ $_variantCount صنفاً', style: TextStyle(color: Theme.of(context).colorScheme.primary, fontWeight: FontWeight.bold)),
+                  ]),
+                ),
+              ),
             Row(children: [
               Expanded(child: formField('سعر البيع', sale, type: TextInputType.number, validator: _num)),
               const SizedBox(width: 8),
               Expanded(child: formField('سعر التكلفة', cost, type: TextInputType.number, validator: _num)),
             ]),
-            formField('الحد الأدنى للمخزون', minStock, type: TextInputType.number, validator: _num),
+            Row(children: [
+              Expanded(child: formField('الحد الأدنى للمخزون', minStock, type: cfg.qtyKeyboard, validator: (v) => (v == null || v.trim().isEmpty) ? null : cfg.validateQty(v, allowZero: true))),
+              const SizedBox(width: 8),
+              if (_isNew) Expanded(child: formField(_variantCount > 1 ? 'الكمية لكل متغيّر' : 'الكمية الحالية', initialQty, type: cfg.qtyKeyboard, validator: (v) => (v == null || v.trim().isEmpty) ? null : cfg.validateQty(v, allowZero: true))),
+            ]),
             formField('الباركود', barcode,
                 type: TextInputType.number,
                 suffix: IconButton(icon: const Icon(Icons.qr_code_scanner), onPressed: _scan, tooltip: 'مسح')),
@@ -273,114 +347,20 @@ class _ProductFormPageState extends State<ProductFormPage> {
                 ),
               ),
             ),
-            StreamBuilder<List<CompanyInfo>>(
-              stream: context.repo.watchCompanies(),
-              builder: (ctx, s) {
-                final list = s.data ?? <CompanyInfo>[];
-                return Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 6),
-                  child: Row(children: [
-                    Expanded(
-                      child: DropdownButtonFormField<int?>(
-                        key: ValueKey('${list.length}-$_companyId'),
-                        initialValue: list.any((x) => x.company.id == _companyId) ? _companyId : null,
-                        decoration: const InputDecoration(labelText: 'الشركة المصنّعة', border: OutlineInputBorder()),
-                        items: [
-                          const DropdownMenuItem(value: null, child: Text('— بدون —')),
-                          for (final x in list) DropdownMenuItem(value: x.company.id, child: Text(x.company.name)),
-                        ],
-                        onChanged: (v) => setState(() => _companyId = v),
-                      ),
-                    ),
-                    IconButton.filledTonal(
-                      tooltip: 'شركة جديدة',
-                      icon: const Icon(Icons.add),
-                      onPressed: () async {
-                        final id = await showCompanyDialog(context);
-                        if (id != null) setState(() => _companyId = id);
-                      },
-                    ),
-                  ]),
-                );
-              },
-            ),
-            SwitchListTile(
-              contentPadding: EdgeInsets.zero,
-              title: const Text('دواء مقيّد بوصفة طبية'),
-              subtitle: const Text('يتطلب عند البيع: رقم الوصفة، اسم الطبيب، اسم المريض، الرقم الوطني، ويُسجَّل في سجل المقيّدة'),
-              value: _restricted,
-              onChanged: (v) => setState(() => _restricted = v),
-            ),
+            if (cfg.expiry)
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('له تاريخ صلاحية'),
+                subtitle: const Text('يُطلب تاريخ الانتهاء في الدفعات، ويُخصم الأقرب انتهاءً أولاً، وتظهر تنبيهات الانتهاء'),
+                value: _trackExpiry,
+                onChanged: (v) => setState(() => _trackExpiry = v),
+              ),
             formField('ملاحظات', notes, maxLines: 3),
           ]),
         ),
       ),
     );
   }
-}
-
-class _CompanyPicker extends StatelessWidget {
-  const _CompanyPicker();
-  @override
-  Widget build(BuildContext context) => SizedBox(
-        height: MediaQuery.sizeOf(context).height * .7,
-        child: StreamBuilder<List<CompanyInfo>>(
-          stream: context.repo.watchCompanies(),
-          builder: (ctx, s) {
-            final list = s.data ?? [];
-            if (list.isEmpty) return const EmptyState(Icons.factory_outlined, 'لا توجد شركات بعد. أضفها من «المزيد ← الشركات».');
-            return ListView.builder(
-              itemCount: list.length,
-              itemBuilder: (_, i) => ListTile(
-                title: Text(list[i].company.name),
-                trailing: Text('${list[i].productCount}'),
-                onTap: () => Navigator.pop(context, list[i]),
-              ),
-            );
-          },
-        ),
-      );
-}
-
-class _CatalogPicker extends StatefulWidget {
-  final CatalogImporter importer;
-  const _CatalogPicker({required this.importer});
-  @override
-  State<_CatalogPicker> createState() => _CatalogPickerState();
-}
-
-class _CatalogPickerState extends State<_CatalogPicker> {
-  List<CatalogDrug> _items = [];
-  @override
-  void initState() {
-    super.initState();
-    _load('');
-  }
-
-  Future<void> _load(String q) async {
-    final r = await widget.importer.search(q);
-    if (mounted) setState(() => _items = r);
-  }
-
-  @override
-  Widget build(BuildContext context) => SizedBox(
-        height: MediaQuery.sizeOf(context).height * .8,
-        child: Column(children: [
-          SearchBox(onChanged: _load, hint: 'ابحث في الكتالوج'),
-          Expanded(
-            child: _items.isEmpty
-                ? const EmptyState(Icons.menu_book, 'الكتالوج فارغ أو لا نتائج.\nاستورد ملف الأدوية من تبويب «البيانات».')
-                : ListView.builder(
-                    itemCount: _items.length,
-                    itemBuilder: (_, i) => ListTile(
-                      title: Text(_items[i].tradeName),
-                      subtitle: Text(_items[i].scientificName),
-                      onTap: () => Navigator.pop(context, _items[i]),
-                    ),
-                  ),
-          ),
-        ]),
-      );
 }
 
 // ═════════════ تفاصيل الصنف والدفعات ═════════════
@@ -421,7 +401,7 @@ class _ProductDetailPageState extends State<ProductDetailPage> {
     final p = _p;
     if (p == null) return const Scaffold(body: Center(child: CircularProgressIndicator()));
     return Scaffold(
-      appBar: AppBar(title: Text(p.name), actions: [
+      appBar: AppBar(title: Text(p.displayName), actions: [
         IconButton(
             icon: const Icon(Icons.edit),
             onPressed: () async {
@@ -431,42 +411,41 @@ class _ProductDetailPageState extends State<ProductDetailPage> {
         IconButton(icon: const Icon(Icons.delete_outline), onPressed: _delete),
       ]),
       floatingActionButton: FloatingActionButton.extended(
-          onPressed: () => showBatchDialog(context, p.id), icon: const Icon(Icons.add), label: const Text('دفعة جديدة')),
+          onPressed: () => showBatchDialog(context, p.id), icon: const Icon(Icons.add), label: const Text('إضافة كمية')),
       body: Centered(
         child: StreamBuilder<List<StockBatch>>(
           stream: context.repo.watchBatches(p.id),
           builder: (ctx, snap) {
             final batches = snap.data ?? [];
-            final total = batches.fold<int>(0, (a, b) => a + b.quantity);
+            final total = q3(batches.fold<double>(0, (a, b) => a + b.quantity));
             return ListView(padding: const EdgeInsets.only(bottom: 88), children: [
               Card(
                 margin: const EdgeInsets.all(12),
                 child: Padding(
                   padding: const EdgeInsets.all(16),
                   child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    if (p.scientificName.isNotEmpty) Text(p.scientificName, style: Theme.of(context).textTheme.titleMedium),
-                    const SizedBox(height: 8),
                     Wrap(spacing: 24, runSpacing: 8, children: [
-                      _kv('الكمية الكلية', '$total ${p.unit}'),
+                      _kv('الكمية الكلية', '${qtyFmt(total)} ${p.unit}'),
                       _kv('سعر البيع', money(p.salePrice)),
                       _kv('التكلفة', money(p.costPrice)),
-                      _kv('الحد الأدنى', '${p.minStock}'),
+                      _kv('الحد الأدنى', qtyFmt(p.minStock)),
                       if (p.barcode != null) _kv('الباركود', p.barcode!),
                       if (p.category.isNotEmpty) _kv('التصنيف', p.category),
-                      if (p.isRestricted) _kv('الحالة', 'مقيّد بوصفة'),
+                      if (p.size.isNotEmpty) _kv('المقاس', p.size),
+                      if (p.color.isNotEmpty) _kv('اللون', p.color),
                     ]),
                     if (p.notes.isNotEmpty) ...[const SizedBox(height: 8), Text(p.notes)],
                   ]),
                 ),
               ),
-              const Padding(padding: EdgeInsets.symmetric(horizontal: 16), child: Text('الدفعات', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16))),
-              if (batches.isEmpty) const Padding(padding: EdgeInsets.all(24), child: Text('لا توجد دفعات. أضف دفعة لتسجيل الكمية وتاريخ الصلاحية.')),
+              Padding(padding: const EdgeInsets.symmetric(horizontal: 16), child: Text(p.trackExpiry ? 'الدفعات' : 'الكميات', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16))),
+              if (batches.isEmpty) const Padding(padding: EdgeInsets.all(24), child: Text('لا توجد كميات. أضف كمية لتسجيل المخزون.')),
               for (final b in batches)
                 ListTile(
-                  leading: Icon(Icons.event, color: _expColor(b)),
-                  title: Text('دفعة ${b.batchNo.isEmpty ? '—' : b.batchNo} • الكمية ${b.quantity}'),
-                  subtitle: Text('الانتهاء ${dateFmt(b.expiry)} • تكلفة ${money(b.cost)}${b.location.isEmpty ? '' : ' • ${b.location}'}'),
-                  trailing: b.expiry != null && b.expiry!.isBefore(DateTime.now()) && b.quantity > 0
+                  leading: Icon(p.trackExpiry ? Icons.event : Icons.inventory_2_outlined, color: p.trackExpiry ? _expColor(b) : null),
+                  title: Text('${p.trackExpiry || b.batchNo.isNotEmpty ? 'دفعة ${b.batchNo.isEmpty ? '—' : b.batchNo} • ' : ''}الكمية ${qtyFmt(b.quantity)}'),
+                  subtitle: Text('${p.trackExpiry ? 'الانتهاء ${dateFmt(b.expiry)} • ' : ''}تكلفة ${money(b.cost)}${b.location.isEmpty ? '' : ' • ${b.location}'}'),
+                  trailing: p.trackExpiry && b.expiry != null && b.expiry!.isBefore(DateTime.now()) && b.quantity > 0
                       ? const Chip(label: Text('منتهية'), visualDensity: VisualDensity.compact)
                       : null,
                   onTap: () => showBatchDialog(context, p.id, batch: b),
@@ -490,47 +469,45 @@ class _ProductDetailPageState extends State<ProductDetailPage> {
       ]);
 }
 
-/// إضافة/تعديل دفعة. [gs1] يعبّئ رقم الدفعة والانتهاء تلقائياً من مسح DataMatrix.
+/// إضافة/تعديل كمية (دفعة). حقول الدفعة والانتهاء تظهر فقط للأصناف ذات الصلاحية.
+/// [gs1] يعبّئ رقم الدفعة والانتهاء تلقائياً من مسح DataMatrix.
 Future<void> showBatchDialog(BuildContext context, int productId, {StockBatch? batch, Gs1Data? gs1}) async {
+  final repo = context.repo;
+  final cfg = context.appRead.cfg;
+  final product = await repo.productById(productId);
+  if (product == null || !context.mounted) return;
+  final withExpiry = product.trackExpiry;
   final no = TextEditingController(text: batch?.batchNo ?? gs1?.batch ?? '');
-  final qty = TextEditingController(text: batch == null ? '' : '${batch.quantity}');
+  final qty = TextEditingController(text: batch == null ? '' : qtyFmt(batch.quantity));
   final exp = TextEditingController(text: batch?.expiry != null ? dateFmt(batch!.expiry) : (gs1?.expiry != null ? dateFmt(gs1!.expiry) : ''));
-  final cost = TextEditingController(text: batch == null ? '' : '${batch.cost}');
+  final cost = TextEditingController(text: batch == null ? '${product.costPrice}' : '${batch.cost}');
   final loc = TextEditingController(text: batch?.location ?? '');
   final form = GlobalKey<FormState>();
-  final repo = context.repo;
-  if (batch == null && cost.text.isEmpty) {
-    final p = await repo.productById(productId);
-    cost.text = '${p?.costPrice ?? 0}';
-  }
-  if (!context.mounted) return;
   await showDialog<void>(
     context: context,
     builder: (ctx) => AlertDialog(
-      title: Text(batch == null ? 'دفعة جديدة' : 'تعديل الدفعة'),
+      title: Text(batch == null ? 'إضافة كمية' : 'تعديل الكمية'),
       content: SingleChildScrollView(
         child: Form(
           key: form,
           child: Column(mainAxisSize: MainAxisSize.min, children: [
-            formField('رقم الدفعة', no),
-            formField('الكمية *', qty, type: TextInputType.number, validator: (v) {
-              final n = parseInt(v);
-              return (n == null || n < 0) ? 'أدخل كمية صحيحة' : null;
-            }),
-            formField('تاريخ الانتهاء (yyyy-mm-dd أو mm/yyyy)', exp, validator: (v) {
-              if (v == null || v.trim().isEmpty) return null;
-              return parseDate(v) == null ? 'تاريخ غير صالح' : null;
-            },
-                suffix: IconButton(
-                    icon: const Icon(Icons.calendar_today),
-                    onPressed: () async {
-                      final d = await showDatePicker(
-                          context: ctx,
-                          initialDate: parseDate(exp.text) ?? DateTime.now().add(const Duration(days: 365)),
-                          firstDate: DateTime(2000),
-                          lastDate: DateTime(2100));
-                      if (d != null) exp.text = dateFmt(d);
-                    })),
+            if (withExpiry) formField('رقم الدفعة', no),
+            formField('الكمية *', qty, type: cfg.qtyKeyboard, validator: (v) => cfg.validateQty(v, allowZero: true)),
+            if (withExpiry)
+              formField('تاريخ الانتهاء (yyyy-mm-dd أو mm/yyyy)', exp, validator: (v) {
+                if (v == null || v.trim().isEmpty) return null;
+                return parseDate(v) == null ? 'تاريخ غير صالح' : null;
+              },
+                  suffix: IconButton(
+                      icon: const Icon(Icons.calendar_today),
+                      onPressed: () async {
+                        final d = await showDatePicker(
+                            context: ctx,
+                            initialDate: parseDate(exp.text) ?? DateTime.now().add(const Duration(days: 365)),
+                            firstDate: DateTime(2000),
+                            lastDate: DateTime(2100));
+                        if (d != null) exp.text = dateFmt(d);
+                      })),
             formField('تكلفة الوحدة', cost, type: TextInputType.number),
             formField('موقع التخزين', loc),
           ]),
@@ -540,7 +517,7 @@ Future<void> showBatchDialog(BuildContext context, int productId, {StockBatch? b
         if (batch != null)
           TextButton(
               onPressed: () async {
-                if (await confirm(ctx, 'حذف الدفعة؟', danger: true, ok: 'حذف')) {
+                if (await confirm(ctx, 'حذف هذه الكمية؟', danger: true, ok: 'حذف')) {
                   await repo.deleteBatch(batch.id);
                   if (ctx.mounted) Navigator.pop(ctx);
                 }
@@ -554,8 +531,8 @@ Future<void> showBatchDialog(BuildContext context, int productId, {StockBatch? b
                 id: batch == null ? const Value.absent() : Value(batch.id),
                 productId: Value(productId),
                 batchNo: Value(no.text.trim()),
-                quantity: Value(parseInt(qty.text) ?? 0),
-                expiry: Value(parseDate(exp.text)),
+                quantity: Value(cfg.readQty(qty.text) ?? 0),
+                expiry: Value(withExpiry ? parseDate(exp.text) : null),
                 cost: Value(parseInt(cost.text) ?? 0),
                 location: Value(loc.text.trim()),
               ));

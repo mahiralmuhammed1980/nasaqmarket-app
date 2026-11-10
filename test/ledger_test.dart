@@ -1,7 +1,7 @@
 import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:flutter_test/flutter_test.dart';
-import 'package:nasaq_pharma/data/database.dart';
-import 'package:nasaq_pharma/data/repository.dart';
+import 'package:nasaq_market/data/database.dart';
+import 'package:nasaq_market/data/repository.dart';
 
 void main() {
   late AppDatabase db;
@@ -12,10 +12,10 @@ void main() {
   });
   tearDown(() => db.close());
 
-  Future<int> product(String name, {int price = 1000, bool restricted = false, int? companyId}) =>
+  Future<int> product(String name, {int price = 1000, int cost = 0, String size = '', String color = '', bool expiry = false}) =>
       repo.saveProduct(ProductsCompanion.insert(
-          name: name, salePrice: Value(price), isRestricted: Value(restricted), companyId: Value(companyId)));
-  Future<void> stock(int pid, int qty) =>
+          name: name, salePrice: Value(price), costPrice: Value(cost), size: Value(size), color: Value(color), trackExpiry: Value(expiry)));
+  Future<void> stock(int pid, double qty) =>
       repo.saveBatch(BatchesCompanion.insert(productId: pid, quantity: Value(qty))).then((_) {});
   Future<List<CashEntry>> entries() => db.select(db.cashEntries).get();
   int sum(List<CashEntry> e) => e.fold(0, (a, b) => a + b.amount);
@@ -25,7 +25,7 @@ void main() {
       final p = await product('أ');
       await stock(p, 10);
       final inv = await repo.createInvoice(
-          patientName: 'س', lines: [InvoiceLine(p, 3, 1000)], discount: 500, paymentMethod: 'card');
+          customerName: 'س', lines: [InvoiceLine(p, 3, 1000)], discount: 500, paymentMethod: 'card');
       final e = await entries();
       expect(e.single.kind, 'sale');
       expect(e.single.amount, 2500);
@@ -41,7 +41,7 @@ void main() {
       final p = await product('ب');
       await stock(p, 10);
       final inv = await repo.createInvoice(
-          patientName: 'س', lines: [InvoiceLine(p, 4, 1000)], paidAmount: 1500);
+          customerName: 'س', lines: [InvoiceLine(p, 4, 1000)], paidAmount: 1500);
       expect(sum(await entries()), 1500);
       await repo.settleInvoice(inv.id);
       expect(sum(await entries()), 4000);
@@ -52,21 +52,21 @@ void main() {
     test('فاتورة آجلة بلا دفع لا تُنشئ حركة', () async {
       final p = await product('ج');
       await stock(p, 5);
-      await repo.createInvoice(patientName: 'س', lines: [InvoiceLine(p, 1, 1000)], paymentMethod: 'credit', paidAmount: 0);
+      await repo.createInvoice(customerName: 'س', lines: [InvoiceLine(p, 1, 1000)], paymentMethod: 'credit', paidAmount: 0);
       expect(await entries(), isEmpty);
     });
 
     test('فشل الفاتورة (مخزون غير كافٍ) لا يترك أثراً مالياً', () async {
       final p = await product('د');
       await stock(p, 1);
-      await expectLater(repo.createInvoice(patientName: 'س', lines: [InvoiceLine(p, 5, 1000)]), throwsA(isA<InsufficientStock>()));
+      await expectLater(repo.createInvoice(customerName: 'س', lines: [InvoiceLine(p, 5, 1000)]), throwsA(isA<InsufficientStock>()));
       expect(await entries(), isEmpty);
     });
 
     test('حذف الفاتورة يعكس الحركات ويبقيها في السجل', () async {
       final p = await product('هـ');
       await stock(p, 10);
-      final inv = await repo.createInvoice(patientName: 'س', lines: [InvoiceLine(p, 2, 1000)], paidAmount: 1200);
+      final inv = await repo.createInvoice(customerName: 'س', lines: [InvoiceLine(p, 2, 1000)], paidAmount: 1200);
       await repo.settleInvoice(inv.id, method: 'transfer');
       expect((await repo.cashSummary()).totalBalance, 2000);
       await repo.voidInvoice(inv.id);
@@ -110,7 +110,7 @@ void main() {
   });
 
   group('المشتريات وكشف حساب المورد', () {
-    Future<int> order(int sup, int pid, int qty, int cost) => repo.createOrder(supplierId: sup, items: [
+    Future<int> order(int sup, int pid, double qty, int cost) => repo.createOrder(supplierId: sup, items: [
           (oid) => PurchaseOrdersItemHelper.item(oid, pid, qty, cost)
         ]);
 
@@ -164,82 +164,117 @@ void main() {
     });
   });
 
-  group('الأدوية المقيّدة', () {
-    const rx = PrescriptionInfo(prescriptionNo: 'R-77', doctorName: 'د. سمير', patientName: 'خالد', patientNationalId: '٠١٢٣٤٥٦٧٨٩٠١');
-
-    test('البيع بلا بيانات الوصفة مرفوض ولا يغيّر شيئاً', () async {
-      final p = await product('مقيّد', restricted: true);
-      await stock(p, 10);
-      await expectLater(repo.createInvoice(patientName: 'خالد', lines: [InvoiceLine(p, 1, 1000)]), throwsA(isA<PrescriptionRequired>()));
-      await expectLater(
-          repo.createInvoice(
-              patientName: 'خالد',
-              lines: [InvoiceLine(p, 1, 1000)],
-              prescription: const PrescriptionInfo(prescriptionNo: '', doctorName: 'د', patientName: 'خ', patientNationalId: '1')),
-          throwsA(isA<PrescriptionRequired>()));
-      expect(await repo.stockOf(p), 10);
-      expect(await db.select(db.invoices).get(), isEmpty);
-      expect(await entries(), isEmpty);
-      expect(await db.select(db.restrictedRecords).get(), isEmpty);
+  group('المتغيّرات (مقاس/لون)', () {
+    test('إنشاء توليفات المقاسات × الألوان بكمية ابتدائية لكل منها', () async {
+      final ids = await repo.createVariants(
+        base: ProductsCompanion.insert(name: 'قميص', salePrice: const Value(15000), costPrice: const Value(8000)),
+        sizes: ['S', 'M'],
+        colors: ['أزرق', 'أسود', 'أبيض'],
+        initialQty: 4,
+      );
+      expect(ids.length, 6);
+      final all = await repo.watchProducts().first;
+      expect(all.length, 6);
+      expect(all.every((p) => p.stock == 4), isTrue);
+      expect(all.map((p) => p.product.displayName).toSet().length, 6);
+      expect((await repo.watchProducts(query: 'أزرق').first).length, 2);
+      expect((await repo.watchProducts(query: 'M').first).length, 3);
     });
 
-    test('البيع بوصفة يسجّل في السجل (والرقم الوطني يُوحَّد)، والعادي لا يتطلب شيئاً', () async {
-      final r = await product('مقيّد', restricted: true);
-      final n = await product('عادي');
-      await stock(r, 10);
-      await stock(n, 10);
-      final inv = await repo.createInvoice(patientName: 'خالد', lines: [InvoiceLine(r, 2, 1000), InvoiceLine(n, 1, 500)], prescription: rx);
-      final recs = await db.select(db.restrictedRecords).get();
-      expect(recs.length, 1); // سطر المقيّد فقط
-      expect(recs.single.productName, 'مقيّد');
-      expect(recs.single.quantity, 2);
-      expect(recs.single.prescriptionNo, 'R-77');
-      expect(recs.single.patientNationalId, '012345678901');
-      expect(recs.single.invoiceNumber, inv.number);
-      expect(recs.single.voided, isFalse);
-      // فاتورة عادية بلا وصفة
-      await repo.createInvoice(patientName: 'س', lines: [InvoiceLine(n, 1, 500)]);
-      expect((await db.select(db.restrictedRecords).get()).length, 1);
-      // حذف الفاتورة يُعلّم السجل ولا يمحوه
-      await repo.voidInvoice(inv.id);
-      final after = await db.select(db.restrictedRecords).get();
-      expect(after.single.voided, isTrue);
+    test('بدون ألوان: مقاسات فقط، وبدون كمية لا تُنشأ دفعات', () async {
+      final ids = await repo.createVariants(base: ProductsCompanion.insert(name: 'حذاء'), sizes: ['40', '41', '42'], colors: []);
+      expect(ids.length, 3);
+      expect(await db.select(db.batches).get(), isEmpty);
     });
 
-    test('بحث السجل بالرقم الوطني واسم المريض والوصفة', () async {
-      final r = await product('مقيّد', restricted: true);
-      await stock(r, 10);
-      await repo.createInvoice(patientName: 'خالد', lines: [InvoiceLine(r, 1, 1000)], prescription: rx);
-      expect((await repo.watchRestricted(query: '012345678901').first).length, 1);
-      expect((await repo.watchRestricted(query: 'خالد').first).length, 1);
-      expect((await repo.watchRestricted(query: 'R-77').first).length, 1);
-      expect((await repo.watchRestricted(query: 'غير موجود').first), isEmpty);
+    test('البيع يخصم من المتغيّر المحدد ويحمل اسمه في الفاتورة', () async {
+      final m = await product('قميص', size: 'M', color: 'أزرق');
+      final l = await product('قميص', size: 'L', color: 'أزرق');
+      await stock(m, 3);
+      await stock(l, 3);
+      final inv = await repo.createInvoice(lines: [InvoiceLine(m, 2, 1000)]);
+      expect(await repo.stockOf(m), 1);
+      expect(await repo.stockOf(l), 3);
+      expect((await repo.invoiceItems(inv.id)).single.productName, 'قميص - M - أزرق');
     });
   });
 
-  group('الشركات', () {
-    test('إضافة وتعديل ومنع التكرار وربط الأصناف وفصلها عند الحذف', () async {
-      final c = await repo.saveCompany(name: 'الأمل', country: 'سوريا');
-      await expectLater(repo.saveCompany(name: ' الأمل '), throwsStateError);
-      await expectLater(repo.saveCompany(name: '  '), throwsArgumentError);
-      await repo.saveCompany(id: c, name: 'الأمل للأدوية', country: 'سوريا'); // تعديل بنفس المعرف مسموح
-      final p1 = await product('أ', companyId: c);
-      await product('ب', companyId: c);
-      await product('ج');
-      var list = await repo.watchCompanies().first;
-      expect(list.single.company.name, 'الأمل للأدوية');
-      expect(list.single.productCount, 2);
-      expect((await repo.watchProducts(companyId: c).first).length, 2);
-      await repo.deleteCompany(c);
-      expect(await repo.watchCompanies().first, isEmpty);
-      expect((await repo.productById(p1))!.companyId, isNull);
-      expect((await repo.watchProducts().first).length, 3); // لم يُحذف أي صنف
+  group('الكميات العشرية (البيع بالوزن)', () {
+    test('بيع 0.75 كغ يخصم بدقة ويحسب المجموع بالتقريب', () async {
+      final p = await product('أرز', price: 12000);
+      await stock(p, 10.5);
+      final inv = await repo.createInvoice(lines: [InvoiceLine(p, 0.75, 12000)]);
+      expect(inv.total, 9000);
+      expect(await repo.stockOf(p), 9.75);
+    });
+
+    test('لا تتراكم أخطاء الفاصلة العائمة', () async {
+      final p = await product('سكر', price: 100);
+      await stock(p, 1);
+      for (var i = 0; i < 10; i++) {
+        await repo.createInvoice(lines: [InvoiceLine(p, 0.1, 100)]);
+      }
+      expect(await repo.stockOf(p), 0);
+      await expectLater(repo.createInvoice(lines: [InvoiceLine(p, 0.001, 100)]), throwsA(isA<InsufficientStock>()));
+    });
+
+    test('إلغاء فاتورة عشرية يعيد الكمية بدقة', () async {
+      final p = await product('جبنة', price: 50000);
+      await stock(p, 2.3);
+      final inv = await repo.createInvoice(lines: [InvoiceLine(p, 1.35, 50000)]);
+      expect(inv.total, 67500);
+      await repo.voidInvoice(inv.id);
+      expect(await repo.stockOf(p), 2.3);
+    });
+  });
+
+  group('الصلاحية الاختيارية', () {
+    test('التنبيهات للأصناف ذات الصلاحية فقط', () async {
+      final milk = await product('حليب', expiry: true);
+      final shirt = await product('قميص');
+      final soon = DateTime.now().add(const Duration(days: 10));
+      await repo.saveBatch(BatchesCompanion.insert(productId: milk, quantity: const Value(5), expiry: Value(soon)));
+      await repo.saveBatch(BatchesCompanion.insert(productId: shirt, quantity: const Value(5), expiry: Value(soon)));
+      final exp = await repo.expiringBatches(withinDays: 30);
+      expect(exp.length, 1);
+      expect(exp.single.product.name, 'حليب');
+    });
+
+    test('صنف بلا تاريخ يُباع عادياً، والمنتهي لا يُباع', () async {
+      final a = await product('أ');
+      await stock(a, 3);
+      await repo.createInvoice(lines: [InvoiceLine(a, 3, 100)]);
+      final b = await product('ب', expiry: true);
+      await repo.saveBatch(BatchesCompanion.insert(productId: b, quantity: const Value(3), expiry: Value(DateTime.now().subtract(const Duration(days: 2)))));
+      await expectLater(repo.createInvoice(lines: [InvoiceLine(b, 1, 100)]), throwsA(isA<InsufficientStock>()));
+    });
+  });
+
+  group('الزبون الاختياري والأرباح والديون', () {
+    test('فاتورة بلا اسم زبون مقبولة', () async {
+      final p = await product('س');
+      await stock(p, 5);
+      final inv = await repo.createInvoice(lines: [InvoiceLine(p, 1, 100)]);
+      expect(inv.customerName, '');
+    });
+
+    test('ربح الفترة = المبيعات بعد الخصم − التكلفة، وديون الزبائن = المتبقي', () async {
+      final p = await product('ب', price: 1000, cost: 600);
+      await stock(p, 10);
+      final start = DateTime.now().subtract(const Duration(hours: 1));
+      await repo.createInvoice(customerName: 'علي', lines: [InvoiceLine(p, 4, 1000)], discount: 200, paidAmount: 1000);
+      // المبيعات 3800، التكلفة 2400، الربح 1400
+      expect(await repo.profitSince(start), 1400);
+      expect(await repo.customerReceivables(), 2800);
+      final inv = (await db.select(db.invoices).get()).single;
+      await repo.settleInvoice(inv.id);
+      expect(await repo.customerReceivables(), 0);
     });
   });
 }
 
 /// مساعد لبناء بند أمر شراء في الاختبارات.
 class PurchaseOrdersItemHelper {
-  static PurchaseOrderItemsCompanion item(int oid, int pid, int qty, int cost) =>
+  static PurchaseOrderItemsCompanion item(int oid, int pid, double qty, int cost) =>
       PurchaseOrderItemsCompanion.insert(orderId: oid, productId: pid, quantity: qty, unitCost: cost);
 }

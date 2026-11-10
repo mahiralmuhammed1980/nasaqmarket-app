@@ -23,240 +23,101 @@ class ImportPreview {
       fatalError == null && rows.any((r) => r.action == ImportAction.create || r.action == ImportAction.update);
 }
 
-// ═════════════ استيراد الكتالوج (أدوية وشركات) ═════════════
-//
-// يلمس جدولي CatalogDrugs وCatalogCompanies فقط. لا يقرب الأصناف ولا الدفعات
-// ولا الفواتير ولا المشتريات أبداً، فلا تتأثر الأرصدة والبيانات المالية.
-
-class _Drug {
-  final String? barcode;
-  final String name, sci, category, unit, company, country;
-  final int? price;
-  _Drug(this.barcode, this.name, this.sci, this.category, this.unit, this.company,
-      this.country, this.price);
-}
-
-class CatalogImporter {
-  final AppDatabase db;
-  CatalogImporter(this.db);
-
-  List<(int, _Drug?, String?)> _parse(ParsedTable t) {
-    final out = <(int, _Drug?, String?)>[];
-    for (var i = 0; i < t.rows.length; i++) {
-      final r = t.rows[i];
-      final name = field(r, 'tradeName');
-      if (name.isEmpty) {
-        out.add((i + 2, null, 'الاسم التجاري فارغ'));
-        continue;
-      }
-      final priceStr = field(r, 'price');
-      final price = parseInt(priceStr);
-      if (priceStr.isNotEmpty && (price == null || price < 0)) {
-        out.add((i + 2, null, 'السعر غير صالح: $priceStr'));
-        continue;
-      }
-      final bc = normalizeDigits(field(r, 'barcode')).replaceAll(RegExp(r'\s'), '');
-      out.add((
-        i + 2,
-        _Drug(bc.isEmpty ? null : bc, name, field(r, 'scientificName'), field(r, 'category'),
-            field(r, 'unit'), field(r, 'company'), field(r, 'country'), price),
-        null
-      ));
-    }
-    return out;
-  }
-
-  Future<ImportPreview> preview(ParsedTable t) async {
-    if (!hasColumn(t, 'tradeName')) {
-      return const ImportPreview([], 'لم أجد عمود "الاسم التجاري" في الملف');
-    }
-    final drugs = await db.select(db.catalogDrugs).get();
-    final byBarcode = {for (final d in drugs) if (d.barcode != null) d.barcode!: d};
-    final byName = {for (final d in drugs) '${normKey(d.tradeName)}|${normKey(d.scientificName)}': d};
-    final companies = {for (final c in await db.select(db.catalogCompanies).get()) normKey(c.name): c};
-    final results = <ImportRowResult>[];
-    final seen = <String>{};
-    for (final (line, d, err) in _parse(t)) {
-      if (d == null) {
-        results.add(ImportRowResult(line, ImportAction.invalid, '', err));
-        continue;
-      }
-      final key = d.barcode ?? '${normKey(d.name)}|${normKey(d.sci)}';
-      if (!seen.add(key)) {
-        results.add(ImportRowResult(line, ImportAction.invalid, d.name, 'مكرر داخل الملف'));
-        continue;
-      }
-      final existing = (d.barcode != null ? byBarcode[d.barcode!] : null) ??
-          byName['${normKey(d.name)}|${normKey(d.sci)}'];
-      if (existing == null) {
-        results.add(ImportRowResult(line, ImportAction.create, d.name));
-      } else {
-        final comp = d.company.isEmpty ? null : companies[normKey(d.company)];
-        final changed = existing.tradeName != d.name ||
-            (d.sci.isNotEmpty && existing.scientificName != d.sci) ||
-            (d.category.isNotEmpty && existing.category != d.category) ||
-            (d.unit.isNotEmpty && existing.unit != d.unit) ||
-            (d.price != null && existing.referencePrice != d.price) ||
-            (d.barcode != null && existing.barcode != d.barcode) ||
-            (d.company.isNotEmpty && (comp == null || existing.companyId != comp.id));
-        results.add(ImportRowResult(
-            line, changed ? ImportAction.update : ImportAction.unchanged, d.name));
-      }
-    }
-    return ImportPreview(results);
-  }
-
-  /// يطبّق الاستيراد. الصفوف غير الصالحة تُتخطى. لا حذف لأي شيء غائب عن الملف.
-  Future<({int created, int updated})> apply(ParsedTable t) async {
-    if (!hasColumn(t, 'tradeName')) throw StateError('لم أجد عمود "الاسم التجاري"');
-    var created = 0, updated = 0;
-    await db.transaction(() async {
-      final companyIds = {
-        for (final c in await db.select(db.catalogCompanies).get()) normKey(c.name): c.id
-      };
-      final drugs = await db.select(db.catalogDrugs).get();
-      final byBarcode = {for (final d in drugs) if (d.barcode != null) d.barcode!: d};
-      final byName = {for (final d in drugs) '${normKey(d.tradeName)}|${normKey(d.scientificName)}': d};
-      final seen = <String>{};
-      for (final (_, d, _) in _parse(t)) {
-        if (d == null) continue;
-        final key = d.barcode ?? '${normKey(d.name)}|${normKey(d.sci)}';
-        if (!seen.add(key)) continue;
-        int? companyId;
-        if (d.company.isNotEmpty) {
-          final k = normKey(d.company);
-          companyId = companyIds[k];
-          if (companyId == null) {
-            companyId = await db.into(db.catalogCompanies).insert(
-                CatalogCompaniesCompanion.insert(name: d.company, country: Value(d.country)));
-            companyIds[k] = companyId;
-          } else if (d.country.isNotEmpty) {
-            await (db.update(db.catalogCompanies)..where((c) => c.id.equals(companyId!)))
-                .write(CatalogCompaniesCompanion(country: Value(d.country)));
-          }
-        }
-        final existing = (d.barcode != null ? byBarcode[d.barcode!] : null) ??
-            byName['${normKey(d.name)}|${normKey(d.sci)}'];
-        if (existing == null) {
-          final id = await db.into(db.catalogDrugs).insert(CatalogDrugsCompanion.insert(
-                tradeName: d.name,
-                barcode: Value(d.barcode),
-                scientificName: Value(d.sci),
-                category: Value(d.category),
-                unit: Value(d.unit),
-                companyId: Value(companyId),
-                referencePrice: Value(d.price),
-              ));
-          final row = await (db.select(db.catalogDrugs)..where((x) => x.id.equals(id))).getSingle();
-          if (row.barcode != null) byBarcode[row.barcode!] = row;
-          byName['${normKey(row.tradeName)}|${normKey(row.scientificName)}'] = row;
-          created++;
-        } else {
-          await (db.update(db.catalogDrugs)..where((x) => x.id.equals(existing.id))).write(
-              CatalogDrugsCompanion(
-                tradeName: Value(d.name),
-                barcode: d.barcode != null ? Value(d.barcode) : const Value.absent(),
-                scientificName: d.sci.isNotEmpty ? Value(d.sci) : const Value.absent(),
-                category: d.category.isNotEmpty ? Value(d.category) : const Value.absent(),
-                unit: d.unit.isNotEmpty ? Value(d.unit) : const Value.absent(),
-                companyId: companyId != null ? Value(companyId) : const Value.absent(),
-                referencePrice: d.price != null ? Value(d.price) : const Value.absent(),
-              ));
-          updated++;
-        }
-      }
-    });
-    return (created: created, updated: updated);
-  }
-
-  Future<List<CatalogDrug>> search(String q, {int limit = 30}) {
-    final s = q.trim();
-    final sel = db.select(db.catalogDrugs)..limit(limit);
-    if (s.isNotEmpty) {
-      sel.where((t) => t.tradeName.like('%$s%') | t.scientificName.like('%$s%') | t.barcode.like('%$s%'));
-    }
-    return sel.get();
-  }
-}
-
 // ═════════════ استيراد الجرد (أصناف + دفعات) ═════════════
-// أعمدة: الاسم التجاري، الباركود، رقم الدفعة، الكمية، تاريخ الانتهاء، التكلفة، السعر، الحد الأدنى...
+// أعمدة: اسم الصنف، الباركود، التصنيف، المقاس، اللون، الكمية، التكلفة، السعر، الحد الأدنى، (اختياري) الدفعة والانتهاء...
 // الأصناف الموجودة (بالباركود أو الاسم) تُستخدم كما هي دون تعديل أسعارها؛ تُضاف الدفعات فقط.
 
 class InventoryImporter {
   final AppDatabase db;
   InventoryImporter(this.db);
 
+  static String _key(String name, String size, String color) =>
+      [normKey(name), normKey(size), normKey(color)].join('|');
+
   Future<ImportPreview> preview(ParsedTable t) async {
-    if (!hasColumn(t, 'tradeName')) {
-      return const ImportPreview([], 'لم أجد عمود "الاسم التجاري" في الملف');
+    if (!hasColumn(t, 'name')) {
+      return const ImportPreview([], 'لم أجد عمود "اسم الصنف" في الملف');
     }
     final products = await db.select(db.products).get();
     final byBarcode = {for (final p in products) if (p.barcode != null) p.barcode!: p};
-    final byName = {for (final p in products) normKey(p.name): p};
+    final byName = {for (final p in products) _key(p.name, p.size, p.color): p};
     final res = <ImportRowResult>[];
     for (var i = 0; i < t.rows.length; i++) {
       final r = t.rows[i];
-      final name = field(r, 'tradeName');
+      final name = field(r, 'name');
       final err = _validate(r);
       if (err != null) {
         res.add(ImportRowResult(i + 2, ImportAction.invalid, name, err));
         continue;
       }
       final bc = normalizeDigits(field(r, 'barcode')).trim();
-      final exists = (bc.isNotEmpty ? byBarcode[bc] : null) ?? byName[normKey(name)];
+      final exists = (bc.isNotEmpty ? byBarcode[bc] : null) ?? byName[_key(name, field(r, 'size'), field(r, 'color'))];
       res.add(ImportRowResult(i + 2, exists == null ? ImportAction.create : ImportAction.update, name));
     }
     return ImportPreview(res);
   }
 
   String? _validate(Map<String, String> r) {
-    if (field(r, 'tradeName').isEmpty) return 'الاسم فارغ';
+    if (field(r, 'name').isEmpty) return 'الاسم فارغ';
     final q = field(r, 'quantity');
     if (q.isNotEmpty) {
-      final v = parseInt(q);
+      final v = parseQty(q);
       if (v == null || v < 0) return 'كمية غير صالحة: $q';
     }
     final e = field(r, 'expiry');
     if (e.isNotEmpty && parseDate(e) == null) return 'تاريخ غير صالح: $e';
-    for (final k in ['cost', 'price', 'minStock']) {
+    for (final k in ['cost', 'price']) {
       final v = field(r, k);
       if (v.isNotEmpty && (parseInt(v) == null || parseInt(v)! < 0)) return 'رقم غير صالح: $v';
     }
+    final m = field(r, 'minStock');
+    if (m.isNotEmpty && (parseQty(m) == null || parseQty(m)! < 0)) return 'رقم غير صالح: $m';
     return null;
   }
 
   Future<({int products, int batches, int skipped})> apply(ParsedTable t) async {
-    if (!hasColumn(t, 'tradeName')) throw StateError('لم أجد عمود "الاسم التجاري"');
+    if (!hasColumn(t, 'name')) throw StateError('لم أجد عمود "اسم الصنف"');
     var np = 0, nb = 0, skipped = 0;
     await db.transaction(() async {
       final products = await db.select(db.products).get();
-      final byBarcode = {for (final p in products) if (p.barcode != null) p.barcode!: p.id};
-      final byName = {for (final p in products) normKey(p.name): p.id};
+      final byBarcode = {for (final p in products) if (p.barcode != null) p.barcode!: p};
+      final byName = {for (final p in products) _key(p.name, p.size, p.color): p};
       for (final r in t.rows) {
         if (_validate(r) != null) {
           skipped++;
           continue;
         }
-        final name = field(r, 'tradeName');
+        final name = field(r, 'name');
+        final size = field(r, 'size'), color = field(r, 'color');
         final bc = normalizeDigits(field(r, 'barcode')).replaceAll(RegExp(r'\s'), '');
-        var pid = (bc.isNotEmpty ? byBarcode[bc] : null) ?? byName[normKey(name)];
-        if (pid == null) {
+        final hasExpiry = parseDate(field(r, 'expiry')) != null;
+        var prod = (bc.isNotEmpty ? byBarcode[bc] : null) ?? byName[_key(name, size, color)];
+        int pid;
+        if (prod == null) {
           pid = await db.into(db.products).insert(ProductsCompanion.insert(
                 name: name,
-                scientificName: Value(field(r, 'scientificName')),
                 category: Value(field(r, 'category')),
+                size: Value(size),
+                color: Value(color),
                 unit: field(r, 'unit').isEmpty ? const Value.absent() : Value(field(r, 'unit')),
                 salePrice: Value(parseInt(field(r, 'price')) ?? 0),
                 costPrice: Value(parseInt(field(r, 'cost')) ?? 0),
-                minStock: Value(parseInt(field(r, 'minStock')) ?? 0),
+                minStock: Value(parseQty(field(r, 'minStock')) ?? 0),
                 barcode: Value(bc.isEmpty ? null : bc),
+                trackExpiry: Value(hasExpiry),
               ));
-          if (bc.isNotEmpty) byBarcode[bc] = pid;
-          byName[normKey(name)] = pid;
+          prod = await (db.select(db.products)..where((x) => x.id.equals(pid))).getSingle();
+          if (bc.isNotEmpty) byBarcode[bc] = prod;
+          byName[_key(name, size, color)] = prod;
           np++;
+        } else {
+          pid = prod.id;
+          // وجود تاريخ انتهاء في الملف يفعّل تتبع الصلاحية للصنف الموجود.
+          if (hasExpiry && !prod.trackExpiry) {
+            await (db.update(db.products)..where((x) => x.id.equals(pid))).write(const ProductsCompanion(trackExpiry: Value(true)));
+          }
         }
-        final qty = parseInt(field(r, 'quantity')) ?? 0;
+        final qty = parseQty(field(r, 'quantity')) ?? 0;
         if (qty > 0) {
           await db.into(db.batches).insert(BatchesCompanion.insert(
                 productId: pid,
@@ -275,10 +136,7 @@ class InventoryImporter {
   }
 }
 
-String catalogTemplateCsv() =>
-    '﻿الباركود,الاسم التجاري,الاسم العلمي,التصنيف,الوحدة,الشركة,بلد الشركة,السعر المرجعي\n'
-    '6221000000011,بنادول 500 ملغ,Paracetamol,مسكنات,علبة,شركة الأمل,سوريا,5000\n';
-
 String inventoryTemplateCsv() =>
-    '﻿الاسم التجاري,الباركود,رقم الدفعة,الكمية,تاريخ الانتهاء,التكلفة,السعر,الحد الأدنى,موقع التخزين\n'
-    'بنادول 500 ملغ,6221000000011,B1234,50,2027-12-31,4000,5000,10,رف A1\n';
+    '\uFEFFاسم الصنف,الباركود,التصنيف,الوحدة,المقاس,اللون,الكمية,التكلفة,السعر,الحد الأدنى,رقم الدفعة,تاريخ الانتهاء,موقع التخزين\n'
+    'قميص قطن,6221000000011,رجالي,قطعة,M,أزرق,20,8000,15000,5,,,رف A1\n'
+    'أرز مصري,6221000000028,مواد غذائية,كغ,,,50.5,9000,12000,10,B100,2027-12-31,مستودع\n';

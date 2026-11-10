@@ -5,48 +5,24 @@ import 'database.dart';
 
 class InsufficientStock implements Exception {
   final String productName;
-  final int requested, available;
+  final double requested, available;
   InsufficientStock(this.productName, this.requested, this.available);
   @override
   String toString() =>
-      'الكمية غير كافية للصنف "$productName": المطلوب $requested والمتاح $available';
+      'الكمية غير كافية للصنف "$productName": المطلوب ${qtyFmt(requested)} والمتاح ${qtyFmt(available)}';
 }
 
-/// بيانات الوصفة الطبية لبيع الأدوية المقيّدة.
-class PrescriptionInfo {
-  final String prescriptionNo, doctorName, patientName, patientNationalId;
-  const PrescriptionInfo({
-    required this.prescriptionNo,
-    required this.doctorName,
-    required this.patientName,
-    required this.patientNationalId,
-  });
-  bool get isComplete =>
-      prescriptionNo.trim().isNotEmpty &&
-      doctorName.trim().isNotEmpty &&
-      patientName.trim().isNotEmpty &&
-      patientNationalId.trim().isNotEmpty;
-}
-
-class PrescriptionRequired implements Exception {
-  final List<String> products;
-  PrescriptionRequired(this.products);
-  @override
-  String toString() =>
-      'الأصناف التالية مقيّدة بوصفة وتتطلب رقم الوصفة واسم الطبيب واسم المريض والرقم الوطني: ${products.join('، ')}';
+/// يُظهر المقاس واللون مع اسم الصنف (لأصناف الألبسة والأحذية).
+extension ProductLabel on Product {
+  String get displayName =>
+      [name, if (size.isNotEmpty) size, if (color.isNotEmpty) color].join(' - ');
 }
 
 class InvoiceLine {
   final int productId;
-  final int quantity;
+  final double quantity;
   final int unitPrice;
   const InvoiceLine(this.productId, this.quantity, this.unitPrice);
-}
-
-class CompanyInfo {
-  final CatalogCompany company;
-  final int productCount;
-  const CompanyInfo(this.company, this.productCount);
 }
 
 class CashSummary {
@@ -84,7 +60,7 @@ String normalizeMethod(String m) => (m == 'card' || m == 'transfer') ? m : 'cash
 
 class ProductStock {
   final Product product;
-  final int stock;
+  final double stock;
   final DateTime? nearestExpiry;
   const ProductStock(this.product, this.stock, this.nearestExpiry);
   bool get low => stock <= product.minStock;
@@ -163,26 +139,34 @@ class Repository {
     });
   }
 
-  /// الأصناف مع مجموع الكمية وأقرب انتهاء، مع بحث اختياري (اسم/علمي/باركود).
-  Stream<List<ProductStock>> watchProducts({String query = '', int? companyId}) {
+  /// التصنيفات المستخدمة فعلاً (للتصفية والاقتراح).
+  Future<List<String>> categories() async {
+    final rows = await (db.select(db.products)..where((t) => t.archived.equals(false))).get();
+    return (rows.map((p) => p.category.trim()).where((c) => c.isNotEmpty).toSet().toList()..sort());
+  }
+
+  /// الأصناف مع مجموع الكمية وأقرب انتهاء، مع بحث اختياري (اسم/مقاس/لون/تصنيف/باركود).
+  Stream<List<ProductStock>> watchProducts({String query = '', String? category}) {
     final q = db.select(db.products)
       ..where((t) => t.archived.equals(false))
-      ..orderBy([(t) => OrderingTerm.asc(t.name)]);
-    if (companyId != null) q.where((t) => t.companyId.equals(companyId));
+      ..orderBy([(t) => OrderingTerm.asc(t.name), (t) => OrderingTerm.asc(t.size), (t) => OrderingTerm.asc(t.color)]);
+    if (category != null) q.where((t) => t.category.equals(category));
     final qs = query.trim();
     if (qs.isNotEmpty) {
       q.where((t) =>
           t.name.like('%$qs%') |
-          t.scientificName.like('%$qs%') |
+          t.size.like('%$qs%') |
+          t.color.like('%$qs%') |
+          t.category.like('%$qs%') |
           t.barcode.like('%$qs%'));
     }
     return q.watch().asyncMap((products) async {
       final batches = await db.select(db.batches).get();
-      final qty = <int, int>{};
+      final qty = <int, double>{};
       final exp = <int, DateTime>{};
       for (final b in batches) {
         if (b.quantity <= 0) continue;
-        qty[b.productId] = (qty[b.productId] ?? 0) + b.quantity;
+        qty[b.productId] = q3((qty[b.productId] ?? 0) + b.quantity);
         if (b.expiry != null) {
           final cur = exp[b.productId];
           if (cur == null || b.expiry!.isBefore(cur)) exp[b.productId] = b.expiry!;
@@ -192,10 +176,39 @@ class Repository {
     });
   }
 
-  Future<int> stockOf(int productId) async {
+  Future<double> stockOf(int productId) async {
     final r = await (db.select(db.batches)..where((t) => t.productId.equals(productId))).get();
-    return r.fold<int>(0, (a, b) => a + b.quantity);
+    return q3(r.fold<double>(0, (a, b) => a + b.quantity));
   }
+
+  /// ينشئ أصنافاً متعددة لنفس الموديل بتوليفات المقاسات × الألوان، وكمية ابتدائية اختيارية لكل منها.
+  /// يعيد معرّفات الأصناف المنشأة.
+  Future<List<int>> createVariants({
+    required ProductsCompanion base,
+    required List<String> sizes,
+    required List<String> colors,
+    double initialQty = 0,
+  }) =>
+      db.transaction(() async {
+        final ids = <int>[];
+        final ss = sizes.isEmpty ? [''] : sizes;
+        final cs = colors.isEmpty ? [''] : colors;
+        for (final s in ss) {
+          for (final c in cs) {
+            final id = await db.into(db.products).insert(base.copyWith(size: Value(s), color: Value(c)));
+            ids.add(id);
+            if (initialQty > 0) {
+              await db.into(db.batches).insert(BatchesCompanion.insert(
+                    productId: id,
+                    quantity: Value(q3(initialQty)),
+                    cost: base.costPrice,
+                    notes: const Value('رصيد افتتاحي'),
+                  ));
+            }
+          }
+        }
+        return ids;
+      });
 
   // ───────── الدفعات ─────────
   Stream<List<StockBatch>> watchBatches(int productId) => (db.select(db.batches)
@@ -224,7 +237,8 @@ class Repository {
           ..where(db.batches.quantity.isBiggerThanValue(0) &
               db.batches.expiry.isNotNull() &
               db.batches.expiry.isSmallerOrEqualValue(limit) &
-              db.products.archived.equals(false))
+              db.products.archived.equals(false) &
+              db.products.trackExpiry.equals(true))
           ..orderBy([OrderingTerm.asc(db.batches.expiry)]))
         .get();
     return [for (final r in rows) BatchInfo(r.readTable(db.batches), r.readTable(db.products))];
@@ -237,51 +251,41 @@ class Repository {
 
   Future<int> inventoryValueAtCost() async {
     final bs = await db.select(db.batches).get();
-    return bs.fold<int>(0, (a, b) => a + b.quantity * b.cost);
+    return bs.fold<int>(0, (a, b) => a + (b.quantity * b.cost).round());
   }
 
   // ───────── المبيعات ─────────
 
   /// إنشاء فاتورة: داخل معاملة واحدة، يخصم من الدفعات الأقرب انتهاءً (FEFO)
-  /// متجاهلاً المنتهية. أي فشل يُلغي كل شيء.
+  /// متجاهلاً المنتهية. أي فشل يُلغي كل شيء. اسم الزبون اختياري.
   Future<Invoice> createInvoice({
-    required String patientName,
-    String patientPhone = '',
+    String customerName = '',
+    String customerPhone = '',
     required List<InvoiceLine> lines,
     int discount = 0,
     String paymentMethod = 'cash',
     int? paidAmount,
     String notes = '',
-    PrescriptionInfo? prescription,
     DateTime? now,
   }) {
     if (lines.isEmpty) throw ArgumentError('الفاتورة بلا أصناف');
     final when = now ?? DateTime.now();
     return db.transaction(() async {
-      // الأدوية المقيّدة تتطلب بيانات الوصفة كاملة قبل أي تغيير في البيانات.
-      final restricted = <Product>[];
-      for (final l in lines) {
-        final pr = await productById(l.productId);
-        if (pr != null && pr.isRestricted) restricted.add(pr);
-      }
-      if (restricted.isNotEmpty && (prescription == null || !prescription.isComplete)) {
-        throw PrescriptionRequired([for (final r in restricted) r.name]);
-      }
       var subtotal = 0;
       final number = await db.nextInvoiceNumber();
-      // نحجز رقم الفاتورة بإدراج رأسها أولاً بقيم مؤقتة ثم نحدّثها.
       final invId = await db.into(db.invoices).insert(InvoicesCompanion.insert(
             number: number,
             createdAt: when,
-            patientName: patientName,
-            patientPhone: Value(patientPhone),
+            customerName: Value(customerName.trim()),
+            customerPhone: Value(customerPhone.trim()),
             subtotal: 0,
             total: 0,
             paymentMethod: Value(paymentMethod),
             notes: Value(notes),
           ));
       for (final l in lines) {
-        if (l.quantity <= 0) throw ArgumentError('كمية غير صالحة');
+        final qty = q3(l.quantity);
+        if (qty <= 0) throw ArgumentError('كمية غير صالحة');
         final product = await productById(l.productId);
         if (product == null) throw StateError('صنف غير موجود');
         final batches = await (db.select(db.batches)
@@ -293,45 +297,33 @@ class Repository {
                 (t) => OrderingTerm.asc(t.id),
               ]))
             .get();
-        final usable = batches.where((b) => b.expiry == null || !b.expiry!.isBefore(DateTime(when.year, when.month, when.day))).toList();
-        final available = usable.fold<int>(0, (a, b) => a + b.quantity);
-        if (available < l.quantity) {
-          throw InsufficientStock(product.name, l.quantity, available);
+        final today = DateTime(when.year, when.month, when.day);
+        final usable = batches.where((b) => b.expiry == null || !b.expiry!.isBefore(today)).toList();
+        final available = q3(usable.fold<double>(0, (a, b) => a + b.quantity));
+        if (available < qty) {
+          throw InsufficientStock(product.displayName, qty, available);
         }
+        final lineTotal = (qty * l.unitPrice).round();
         final itemId = await db.into(db.invoiceItems).insert(InvoiceItemsCompanion.insert(
               invoiceId: invId,
               productId: Value(l.productId),
-              productName: product.name,
-              quantity: l.quantity,
+              productName: product.displayName,
+              quantity: qty,
               unitPrice: l.unitPrice,
               unitCost: Value(product.costPrice),
-              lineTotal: l.quantity * l.unitPrice,
+              lineTotal: lineTotal,
             ));
-        if (product.isRestricted) {
-          await db.into(db.restrictedRecords).insert(RestrictedRecordsCompanion.insert(
-                createdAt: when,
-                invoiceId: Value(invId),
-                invoiceNumber: Value(number),
-                productId: Value(product.id),
-                productName: product.name,
-                quantity: l.quantity,
-                prescriptionNo: prescription!.prescriptionNo.trim(),
-                doctorName: prescription.doctorName.trim(),
-                patientName: prescription.patientName.trim(),
-                patientNationalId: normalizeDigits(prescription.patientNationalId).trim(),
-              ));
-        }
-        var remaining = l.quantity;
+        var remaining = qty;
         for (final b in usable) {
-          if (remaining == 0) break;
+          if (remaining <= 0) break;
           final take = remaining < b.quantity ? remaining : b.quantity;
           await (db.update(db.batches)..where((t) => t.id.equals(b.id)))
-              .write(BatchesCompanion(quantity: Value(b.quantity - take)));
+              .write(BatchesCompanion(quantity: Value(q3(b.quantity - take))));
           await db.into(db.invoiceItemBatches).insert(InvoiceItemBatchesCompanion.insert(
               invoiceItemId: itemId, batchId: b.id, quantity: take));
-          remaining -= take;
+          remaining = q3(remaining - take);
         }
-        subtotal += l.quantity * l.unitPrice;
+        subtotal += lineTotal;
       }
       if (discount < 0 || discount > subtotal) {
         throw ArgumentError('خصم غير صالح');
@@ -385,8 +377,6 @@ class Repository {
                 refId: invoiceId);
           }
         }
-        await (db.update(db.restrictedRecords)..where((t) => t.invoiceId.equals(invoiceId)))
-            .write(const RestrictedRecordsCompanion(voided: Value(true)));
         final items = await (db.select(db.invoiceItems)..where((t) => t.invoiceId.equals(invoiceId))).get();
         for (final it in items) {
           final allocs = await (db.select(db.invoiceItemBatches)..where((t) => t.invoiceItemId.equals(it.id))).get();
@@ -394,7 +384,7 @@ class Repository {
             final b = await (db.select(db.batches)..where((t) => t.id.equals(a.batchId))).getSingleOrNull();
             if (b != null) {
               await (db.update(db.batches)..where((t) => t.id.equals(b.id)))
-                  .write(BatchesCompanion(quantity: Value(b.quantity + a.quantity)));
+                  .write(BatchesCompanion(quantity: Value(q3(b.quantity + a.quantity))));
             }
           }
           await (db.delete(db.invoiceItemBatches)..where((t) => t.invoiceItemId.equals(it.id))).go();
@@ -425,7 +415,7 @@ class Repository {
     final q = db.select(db.invoices)..orderBy([(t) => OrderingTerm.desc(t.createdAt), (t) => OrderingTerm.desc(t.id)]);
     final qs = query.trim();
     if (qs.isNotEmpty) {
-      q.where((t) => t.patientName.like('%$qs%') | t.number.like('%$qs%') | t.patientPhone.like('%$qs%'));
+      q.where((t) => t.customerName.like('%$qs%') | t.number.like('%$qs%') | t.customerPhone.like('%$qs%'));
     }
     return q.watch();
   }
@@ -436,6 +426,25 @@ class Repository {
   Future<int> salesTotalSince(DateTime from) async {
     final r = await (db.select(db.invoices)..where((t) => t.createdAt.isBiggerOrEqualValue(from))).get();
     return r.fold<int>(0, (a, b) => a + b.total);
+  }
+
+  /// ربح الفترة = إجمالي الفواتير (بعد الخصم) − تكلفة الأصناف المباعة وقت البيع.
+  Future<int> profitSince(DateTime from) async {
+    final invs = await (db.select(db.invoices)..where((t) => t.createdAt.isBiggerOrEqualValue(from))).get();
+    if (invs.isEmpty) return 0;
+    final ids = invs.map((i) => i.id).toSet();
+    final items = await db.select(db.invoiceItems).get();
+    var cost = 0;
+    for (final it in items) {
+      if (ids.contains(it.invoiceId)) cost += (it.quantity * it.unitCost).round();
+    }
+    return invs.fold<int>(0, (a, b) => a + b.total) - cost;
+  }
+
+  /// ديون الزبائن: مجموع المتبقي على الفواتير غير المسددة.
+  Future<int> customerReceivables() async {
+    final r = await (db.select(db.invoices)..where((t) => t.paymentStatus.equals('paid').not())).get();
+    return r.fold<int>(0, (a, b) => a + (b.total - b.paidAmount));
   }
 
   // ───────── المشتريات ─────────
@@ -492,7 +501,7 @@ class Repository {
           await db.into(db.batches).insert(BatchesCompanion.insert(
                 productId: it.productId,
                 batchNo: Value(it.batchNo),
-                quantity: Value(it.quantity),
+                quantity: Value(q3(it.quantity)),
                 expiry: Value(it.expiry),
                 cost: Value(it.unitCost),
                 supplierId: Value(o.supplierId),
@@ -518,7 +527,7 @@ class Repository {
       });
 
   int orderTotal(List<PurchaseOrderItem> items) =>
-      items.fold<int>(0, (a, i) => a + i.quantity * i.unitCost);
+      items.fold<int>(0, (a, i) => a + (i.quantity * i.unitCost).round());
 
   // ═════════════ الصندوق ═════════════
 
@@ -685,7 +694,7 @@ class Repository {
     final items = await db.select(db.purchaseOrderItems).get();
     final totals = <int, int>{};
     for (final i in items) {
-      totals[i.orderId] = (totals[i.orderId] ?? 0) + i.quantity * i.unitCost;
+      totals[i.orderId] = (totals[i.orderId] ?? 0) + (i.quantity * i.unitCost).round();
     }
     for (final o in orders) {
       out[o.supplierId] = (out[o.supplierId] ?? 0) + (totals[o.id] ?? 0);
@@ -695,57 +704,5 @@ class Repository {
       if (e.supplierId != null) out[e.supplierId!] = (out[e.supplierId!] ?? 0) + e.amount; // amount سالب
     }
     return out;
-  }
-
-  // ═════════════ الشركات ═════════════
-
-  Stream<List<CompanyInfo>> watchCompanies() {
-    final q = db.select(db.catalogCompanies)..orderBy([(t) => OrderingTerm.asc(t.name)]);
-    return q.watch().asyncMap((cs) async {
-      final prods = await (db.select(db.products)..where((t) => t.archived.equals(false))).get();
-      final count = <int, int>{};
-      for (final p in prods) {
-        if (p.companyId != null) count[p.companyId!] = (count[p.companyId!] ?? 0) + 1;
-      }
-      return [for (final c in cs) CompanyInfo(c, count[c.id] ?? 0)];
-    });
-  }
-
-  Future<int> saveCompany({int? id, required String name, String country = ''}) async {
-    final n = name.trim();
-    if (n.isEmpty) throw ArgumentError('اسم الشركة مطلوب');
-    final all = await db.select(db.catalogCompanies).get();
-    if (all.any((c) => c.id != id && normKey(c.name) == normKey(n))) {
-      throw StateError('توجد شركة بهذا الاسم مسبقاً');
-    }
-    return db.into(db.catalogCompanies).insertOnConflictUpdate(CatalogCompaniesCompanion(
-        id: id == null ? const Value.absent() : Value(id), name: Value(n), country: Value(country.trim())));
-  }
-
-  /// حذف شركة: تُفصل عن أصنافها (لا يُحذف أي صنف).
-  Future<void> deleteCompany(int id) => db.transaction(() async {
-        await (db.update(db.products)..where((t) => t.companyId.equals(id)))
-            .write(const ProductsCompanion(companyId: Value(null)));
-        await (db.update(db.catalogDrugs)..where((t) => t.companyId.equals(id)))
-            .write(const CatalogDrugsCompanion(companyId: Value(null)));
-        await (db.delete(db.catalogCompanies)..where((t) => t.id.equals(id))).go();
-      });
-
-  // ═════════════ سجل الأدوية المقيّدة ═════════════
-
-  Stream<List<RestrictedRecord>> watchRestricted({String query = ''}) {
-    final q = db.select(db.restrictedRecords)
-      ..orderBy([(t) => OrderingTerm.desc(t.createdAt), (t) => OrderingTerm.desc(t.id)]);
-    final s = query.trim();
-    if (s.isNotEmpty) {
-      q.where((t) =>
-          t.patientName.like('%$s%') |
-          t.patientNationalId.like('%$s%') |
-          t.prescriptionNo.like('%$s%') |
-          t.doctorName.like('%$s%') |
-          t.productName.like('%$s%') |
-          t.invoiceNumber.like('%$s%'));
-    }
-    return q.watch();
   }
 }

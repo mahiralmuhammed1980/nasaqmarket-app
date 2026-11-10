@@ -73,11 +73,11 @@ class _PinEntryScreenState extends State<PinEntryScreen> {
                   onPressed: () async {
                     final app = context.app;
                     try {
-                      if (await app.license.confirmOwner()) {
+                      if (await app.auth.confirmOwner()) {
                         await app.removePin();
                         if (mounted) snack(context, 'تم إيقاف الرمز. يمكنك تعيين رمز جديد من الإعدادات.');
                       } else if (mounted) {
-                        snack(context, 'الحساب لا يطابق حساب التفعيل', error: true);
+                        snack(context, 'الحساب لا يطابق حساب التطبيق', error: true);
                       }
                     } catch (_) {
                       if (mounted) snack(context, 'تعذّر التحقق. تأكد من الاتصال بالإنترنت.', error: true);

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import '../app_state.dart';
 import '../core/format.dart';
 import '../data/database.dart';
+import '../data/repository.dart';
 import 'cash_screen.dart';
 import 'common.dart';
 import 'supplier_statement_page.dart';
@@ -232,11 +233,12 @@ class _OrderFormPageState extends State<OrderFormPage> {
   Future<void> _save(String status) async {
     if (supplierId == null) return snack(context, 'اختر المورد', error: true);
     if (lines.isEmpty) return snack(context, 'أضف صنفاً واحداً على الأقل', error: true);
+    final cfg = context.appRead.cfg;
     for (final l in lines) {
-      final q = parseInt(l.qty.text);
-      if (q == null || q <= 0) return snack(context, 'كمية غير صالحة للصنف ${l.product.name}', error: true);
-      if (l.expiry.text.trim().isNotEmpty && parseDate(l.expiry.text) == null) {
-        return snack(context, 'تاريخ انتهاء غير صالح للصنف ${l.product.name}', error: true);
+      final q = cfg.readQty(l.qty.text);
+      if (q == null || q <= 0) return snack(context, 'كمية غير صالحة للصنف ${l.product.displayName}', error: true);
+      if (l.product.trackExpiry && l.expiry.text.trim().isNotEmpty && parseDate(l.expiry.text) == null) {
+        return snack(context, 'تاريخ انتهاء غير صالح للصنف ${l.product.displayName}', error: true);
       }
     }
     await context.repo.createOrder(
@@ -248,10 +250,10 @@ class _OrderFormPageState extends State<OrderFormPage> {
           (oid) => PurchaseOrderItemsCompanion.insert(
                 orderId: oid,
                 productId: l.product.id,
-                quantity: parseInt(l.qty.text)!,
+                quantity: cfg.readQty(l.qty.text)!,
                 unitCost: parseInt(l.cost.text) ?? 0,
-                batchNo: Value(l.batch.text.trim()),
-                expiry: Value(parseDate(l.expiry.text)),
+                batchNo: Value(l.product.trackExpiry ? l.batch.text.trim() : ''),
+                expiry: Value(l.product.trackExpiry ? parseDate(l.expiry.text) : null),
               )
       ],
     );
@@ -280,19 +282,20 @@ class _OrderFormPageState extends State<OrderFormPage> {
                   padding: const EdgeInsets.all(10),
                   child: Column(children: [
                     Row(children: [
-                      Expanded(child: Text(lines[i].product.name, style: const TextStyle(fontWeight: FontWeight.bold))),
+                      Expanded(child: Text(lines[i].product.displayName, style: const TextStyle(fontWeight: FontWeight.bold))),
                       IconButton(icon: const Icon(Icons.delete_outline), onPressed: () => setState(() => lines.removeAt(i))),
                     ]),
                     Row(children: [
-                      Expanded(child: formField('الكمية', lines[i].qty, type: TextInputType.number)),
+                      Expanded(child: formField('الكمية', lines[i].qty, type: context.app.cfg.qtyKeyboard)),
                       const SizedBox(width: 8),
                       Expanded(child: formField('تكلفة الوحدة', lines[i].cost, type: TextInputType.number)),
                     ]),
-                    Row(children: [
-                      Expanded(child: formField('رقم الدفعة', lines[i].batch)),
-                      const SizedBox(width: 8),
-                      Expanded(child: formField('الانتهاء', lines[i].expiry)),
-                    ]),
+                    if (lines[i].product.trackExpiry)
+                      Row(children: [
+                        Expanded(child: formField('رقم الدفعة', lines[i].batch)),
+                        const SizedBox(width: 8),
+                        Expanded(child: formField('الانتهاء', lines[i].expiry)),
+                      ]),
                   ]),
                 ),
               ),
@@ -320,7 +323,7 @@ class _SimplePickerState extends State<_SimplePicker> {
   String q = '';
   @override
   Widget build(BuildContext context) {
-    final list = widget.products.where((p) => normKey(p.name).contains(normKey(q)) || (p.barcode ?? '').contains(q)).toList();
+    final list = widget.products.where((p) => normKey(p.displayName).contains(normKey(q)) || (p.barcode ?? '').contains(q)).toList();
     return SizedBox(
       height: MediaQuery.sizeOf(context).height * .8,
       child: Column(children: [
@@ -330,7 +333,7 @@ class _SimplePickerState extends State<_SimplePicker> {
               ? const EmptyState(Icons.search_off, 'لا نتائج. أضف الصنف أولاً من تبويب المخزون.')
               : ListView.builder(
                   itemCount: list.length,
-                  itemBuilder: (_, i) => ListTile(title: Text(list[i].name), onTap: () => Navigator.pop(context, list[i])),
+                  itemBuilder: (_, i) => ListTile(title: Text(list[i].displayName), onTap: () => Navigator.pop(context, list[i])),
                 ),
         ),
       ]),
@@ -367,7 +370,7 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
     if (mounted) setState(() {
       order = o;
       items = it;
-      names = {for (final p in ps) p.id: p.name};
+      names = {for (final p in ps) p.id: p.displayName};
       supplier = s?.name ?? '';
     });
   }
@@ -411,8 +414,8 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
             ListTile(
               contentPadding: EdgeInsets.zero,
               title: Text(names[it.productId] ?? '—'),
-              subtitle: Text('${it.quantity} × ${money(it.unitCost)}${it.batchNo.isEmpty ? '' : ' • دفعة ${it.batchNo}'}${it.expiry == null ? '' : ' • ${dateFmt(it.expiry)}'}'),
-              trailing: Text(money(it.quantity * it.unitCost)),
+              subtitle: Text('${qtyFmt(it.quantity)} × ${money(it.unitCost)}${it.batchNo.isEmpty ? '' : ' • دفعة ${it.batchNo}'}${it.expiry == null ? '' : ' • ${dateFmt(it.expiry)}'}'),
+              trailing: Text(money((it.quantity * it.unitCost).round())),
             ),
           const Divider(height: 24),
           Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [

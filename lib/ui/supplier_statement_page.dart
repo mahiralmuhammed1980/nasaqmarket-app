@@ -69,7 +69,7 @@ class _SupplierStatementPageState extends State<SupplierStatementPage> {
                 tooltip: 'مشاركة / تصدير PDF',
                 icon: const Icon(Icons.picture_as_pdf),
                 onPressed: () async {
-                  final bytes = await buildSupplierStatementPdf(st, context.appRead.pharmacy);
+                  final bytes = await buildSupplierStatementPdf(st, context.appRead.store);
                   await Printing.sharePdf(bytes: Uint8List.fromList(bytes), filename: 'statement_${st.supplier.name}.pdf');
                 }),
             IconButton(tooltip: 'الرصيد الافتتاحي', icon: const Icon(Icons.edit_note), onPressed: () => _editOpening(st)),

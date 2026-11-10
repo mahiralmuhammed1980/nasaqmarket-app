@@ -1,7 +1,7 @@
 import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:flutter_test/flutter_test.dart';
-import 'package:nasaq_pharma/data/database.dart';
-import 'package:nasaq_pharma/data/repository.dart';
+import 'package:nasaq_market/data/database.dart';
+import 'package:nasaq_market/data/repository.dart';
 
 /// اختبار أداء: 10 آلاف صنف و30 ألف دفعة. الحدود واسعة عمداً لتجنب عدم الاستقرار على CI.
 void main() {
@@ -13,7 +13,7 @@ void main() {
       b.insertAll(db.products, [
         for (var i = 0; i < 10000; i++)
           ProductsCompanion.insert(
-              name: 'دواء $i', barcode: Value('62210${i.toString().padLeft(8, '0')}'), salePrice: const Value(1000), minStock: const Value(5))
+              name: 'صنف $i', barcode: Value('62210${i.toString().padLeft(8, '0')}'), salePrice: const Value(1000), minStock: const Value(5), trackExpiry: const Value(true))
       ]);
     });
     await db.batch((b) {
@@ -29,7 +29,7 @@ void main() {
     });
 
     final sw = Stopwatch()..start();
-    final found = await repo.watchProducts(query: 'دواء 777').first;
+    final found = await repo.watchProducts(query: 'صنف 777').first;
     final tSearch = sw.elapsedMilliseconds;
     expect(found, isNotEmpty);
 
@@ -44,7 +44,7 @@ void main() {
     expect(expiring, isNotEmpty);
 
     sw.reset();
-    final inv = await repo.createInvoice(patientName: 'س', lines: [for (var i = 1; i <= 20; i++) InvoiceLine(i * 100, 2, 1000)]);
+    final inv = await repo.createInvoice(customerName: 'س', lines: [for (var i = 1; i <= 20; i++) InvoiceLine(i * 100, 2, 1000)]);
     final tInvoice = sw.elapsedMilliseconds;
     expect(inv.total, 40000);
 

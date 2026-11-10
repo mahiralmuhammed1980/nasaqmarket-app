@@ -47,20 +47,6 @@ class _DataScreenState extends State<DataScreen> {
     }
   }
 
-  Future<void> _importCatalog() async {
-    final t = await _pickTable();
-    if (t == null || !mounted) return;
-    final imp = CatalogImporter(context.app.db);
-    final pv = await imp.preview(t);
-    if (!mounted) return;
-    final go = await _previewDialog('معاينة استيراد كتالوج الأدوية', pv,
-        note: 'هذا الاستيراد يحدّث الكتالوج فقط (الأدوية والشركات). لا يمسّ المخزون ولا الفواتير ولا المشتريات ولا الأرصدة.');
-    if (go != true || !mounted) return;
-    await context.app.safetyBackup('before_catalog_import');
-    final res = await _guard(() => imp.apply(t));
-    if (res != null && mounted) snack(context, 'تمت الإضافة: ${res.created} • التحديث: ${res.updated}');
-  }
-
   Future<void> _importInventory() async {
     final t = await _pickTable();
     if (t == null || !mounted) return;
@@ -68,7 +54,7 @@ class _DataScreenState extends State<DataScreen> {
     final pv = await imp.preview(t);
     if (!mounted) return;
     final go = await _previewDialog('معاينة استيراد الجرد', pv,
-        note: 'تُنشأ الأصناف الجديدة وتُضاف الدفعات. الأصناف الموجودة تبقى أسعارها كما هي.');
+        note: 'تُنشأ الأصناف الجديدة وتُضاف الكميات. الأصناف الموجودة تبقى أسعارها كما هي.');
     if (go != true || !mounted) return;
     await context.app.safetyBackup('before_inventory_import');
     final res = await _guard(() => imp.apply(t));
@@ -117,14 +103,17 @@ class _DataScreenState extends State<DataScreen> {
     final prods = await db.select(db.products).get();
     final batches = await db.select(db.batches).get();
     String esc(String s) => '"${s.replaceAll('"', '""')}"';
-    final b = StringBuffer('﻿الاسم التجاري,الاسم العلمي,الباركود,رقم الدفعة,الكمية,تاريخ الانتهاء,التكلفة,السعر,الحد الأدنى,موقع التخزين\n');
+    final b = StringBuffer('\uFEFFاسم الصنف,الباركود,التصنيف,الوحدة,المقاس,اللون,الكمية,التكلفة,السعر,الحد الأدنى,رقم الدفعة,تاريخ الانتهاء,موقع التخزين\n');
+    String exp(DateTime? d) => d == null ? '' : dateFmt(d);
     for (final p in prods.where((p) => !p.archived)) {
       final bs = batches.where((x) => x.productId == p.id && x.quantity > 0).toList();
-      if (bs.isEmpty) {
-        b.writeln([esc(p.name), esc(p.scientificName), esc(p.barcode ?? ''), '', 0, '', p.costPrice, p.salePrice, p.minStock, ''].join(','));
-      }
+      List<String> row(double q, String batchNo, DateTime? e, int cost, String loc) => [
+            esc(p.name), esc(p.barcode ?? ''), esc(p.category), esc(p.unit), esc(p.size), esc(p.color),
+            qtyFmt(q), '$cost', '${p.salePrice}', qtyFmt(p.minStock), esc(batchNo), exp(e), esc(loc),
+          ];
+      if (bs.isEmpty) b.writeln(row(0, '', null, p.costPrice, '').join(','));
       for (final x in bs) {
-        b.writeln([esc(p.name), esc(p.scientificName), esc(p.barcode ?? ''), esc(x.batchNo), x.quantity, dateFmt(x.expiry).replaceAll('—', ''), x.cost, p.salePrice, p.minStock, esc(x.location)].join(','));
+        b.writeln(row(x.quantity, x.batchNo, x.expiry, x.cost, x.location).join(','));
       }
     }
     await _shareText(b.toString(), 'inventory_${dateFmt(DateTime.now())}.csv');
@@ -155,9 +144,7 @@ class _DataScreenState extends State<DataScreen> {
       Centered(
         child: ListView(padding: const EdgeInsets.all(12), children: [
           _group(context, 'الاستيراد', [
-            tile(Icons.menu_book, 'استيراد كتالوج الأدوية والشركات', 'ملف Excel أو CSV لتحديث قائمة الأدوية دون التأثير على المخزون والمالية', _importCatalog),
-            tile(Icons.inventory, 'استيراد الجرد (أصناف ودفعات)', 'ملف يحتوي الأصناف والكميات وأرقام الدفعات وتواريخ الانتهاء', _importInventory),
-            tile(Icons.description_outlined, 'قالب كتالوج الأدوية', 'ملف CSV بالأعمدة العربية المعتمدة', () => _shareText(catalogTemplateCsv(), 'catalog_template.csv')),
+            tile(Icons.inventory, 'استيراد الجرد (أصناف ودفعات)', 'ملف يحتوي الأصناف والكميات والأسعار (والمقاس واللون وتاريخ الانتهاء عند الحاجة)', _importInventory),
             tile(Icons.description_outlined, 'قالب الجرد', 'ملف CSV بالأعمدة العربية المعتمدة', () => _shareText(inventoryTemplateCsv(), 'inventory_template.csv')),
           ]),
           _group(context, 'التصدير', [
@@ -194,8 +181,9 @@ class _ColumnsGuide extends StatelessWidget {
             Padding(
               padding: EdgeInsets.all(16),
               child: Text(
-                'كتالوج الأدوية: الباركود، الاسم التجاري (مطلوب)، الاسم العلمي، التصنيف، الوحدة، الشركة، بلد الشركة، السعر المرجعي.\n\n'
-                'الجرد: الاسم التجاري (مطلوب)، الباركود، رقم الدفعة، الكمية، تاريخ الانتهاء، التكلفة، السعر، الحد الأدنى، موقع التخزين.\n\n'
+                'الجرد: اسم الصنف (مطلوب)، الباركود، التصنيف، الوحدة، المقاس، اللون، الكمية، التكلفة، السعر، الحد الأدنى، رقم الدفعة، تاريخ الانتهاء، موقع التخزين.\n\n'
+                'المقاس واللون للألبسة والأحذية: كل توليفة تُعتبر صنفاً مستقلاً. تاريخ الانتهاء اختياري ويفعّل تتبع الصلاحية للصنف.\n'
+                'الكميات العشرية مقبولة للبيع بالوزن (مثل 2.5).\n\n'
                 'التواريخ: 2027-12-31 أو 31/12/2027 أو 12/2027 (يُعتبر آخر الشهر).\n'
                 'الأرقام: تُقبل الأرقام العربية والفواصل (3,000).\n'
                 'الملفات: CSV بترميز UTF-8 (فاصلة أو فاصلة منقوطة) أو Excel بصيغة xlsx.',
