@@ -23,7 +23,7 @@ class _SalesScreenState extends State<SalesScreen> {
   @override
   Widget build(BuildContext context) => Scaffold(
         floatingActionButton: FloatingActionButton.extended(
-          onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const NewInvoicePage())),
+          onPressed: () => canWrite(context) ? Navigator.push(context, MaterialPageRoute(builder: (_) => const NewInvoicePage())) : null,
           icon: const Icon(Icons.add),
           label: const Text('فاتورة جديدة'),
         ),

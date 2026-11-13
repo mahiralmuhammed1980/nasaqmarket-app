@@ -91,7 +91,7 @@ class _CashScreenState extends State<CashScreen> {
   Widget build(BuildContext context) {
     final repo = context.repo;
     return Scaffold(
-      floatingActionButton: FloatingActionButton.extended(onPressed: _newEntry, icon: const Icon(Icons.add), label: const Text('حركة جديدة')),
+      floatingActionButton: FloatingActionButton.extended(onPressed: () => canWrite(context) ? _newEntry() : null, icon: const Icon(Icons.add), label: const Text('حركة جديدة')),
       body: Centered(
         maxWidth: 800,
         child: Column(children: [

@@ -78,6 +78,7 @@ class _SupplierStatementPageState extends State<SupplierStatementPage> {
             icon: const Icon(Icons.payments),
             label: const Text('تسجيل دفعة'),
             onPressed: () async {
+              if (!canWrite(context)) return;
               final ok = await showCashEntryDialog(context, 'supplier_payment', supplierId: st.supplier.id);
               if (ok == true) _reload();
             },

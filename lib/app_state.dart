@@ -9,6 +9,7 @@ import 'services/backup.dart';
 import 'services/kv_store.dart';
 import 'core/business.dart';
 import 'core/format.dart';
+import 'services/access.dart';
 import 'services/auth.dart';
 import 'services/store_info.dart';
 import 'services/pin.dart';
@@ -23,6 +24,10 @@ class AppController extends ChangeNotifier {
   final AppDatabase? _injectedDb;
   final bool _forceSignedIn;
   final BusinessType? _presetType;
+  final DateTime? _freeUntilOverride;
+  final DateTime Function() _clock;
+  AccessPolicy policy = AccessPolicy(kFreeUntil);
+  DateTime _seen = DateTime.fromMillisecondsSinceEpoch(0);
 
   /// للاختبارات: يمكن حقن قاعدة بيانات وتخزين وتجاوز تسجيل الدخول وتحديد نوع النشاط مسبقاً.
   AppController({
@@ -30,10 +35,14 @@ class AppController extends ChangeNotifier {
     KvStore? kvStore,
     @visibleForTesting bool forceSignedIn = false,
     @visibleForTesting BusinessType? presetType,
+    @visibleForTesting DateTime? freeUntil,
+    @visibleForTesting DateTime Function()? clock,
   })  : kv = kvStore ?? SecureKv(),
         _injectedDb = database,
         _forceSignedIn = forceSignedIn,
-        _presetType = presetType;
+        _presetType = presetType,
+        _freeUntilOverride = freeUntil,
+        _clock = clock ?? DateTime.now;
   final DriveBackupService drive = DriveBackupService();
   late final AuthService auth = AuthService(kv, drive);
   late final PinManager pin = PinManager(kv);
@@ -49,12 +58,41 @@ class AppController extends ChangeNotifier {
   bool get signedIn => account != null || devBypass || _forceSignedIn;
   bool get onboarded => config != null;
 
+  /// الوقت الفعلي: الأكبر بين ساعة الهاتف وآخر وقت شوهد (يمنع إرجاع الساعة للالتفاف).
+  DateTime get effectiveNow {
+    final t = _clock();
+    return t.isAfter(_seen) ? t : _seen;
+  }
+
+  /// وضع القراءة فقط بعد انتهاء الفترة المجانية (ما لم يكن هناك اشتراك).
+  bool get readOnly => policy.readOnly(effectiveNow);
+  bool get inFreePeriod => policy.isFree(effectiveNow);
+  int get freeDaysLeft => policy.daysLeft(effectiveNow);
+
+  /// يحدّث آخر وقت شوهد (يُستدعى عند فتح التطبيق وعند العودة من الخلفية).
+  Future<void> touchClock() async {
+    final before = readOnly;
+    try {
+      _seen = await ClockGuard(kv, _clock).now();
+    } catch (_) {}
+    if (readOnly != before) notifyListeners();
+  }
+
+  Future<void> _refreshFreeUntil() async {
+    final src = FreeUntilSource(kv);
+    final d = await src.refresh();
+    if (d != null) {
+      policy = AccessPolicy(d, subscribed: policy.subscribed);
+      notifyListeners();
+    }
+  }
+
   /// إعدادات المحل الحالية (نوع افتراضي «عام» قبل الإعداد الأول).
   StoreConfig get cfg => config ?? StoreConfig.forType(BusinessType.general);
 
   Future<void> init() async {
     db = _injectedDb ?? openAppDatabase();
-    repo = Repository(db);
+    repo = Repository(db, isLocked: () => readOnly);
     try {
       account = await auth.current();
     } catch (_) {
@@ -62,12 +100,15 @@ class AppController extends ChangeNotifier {
     }
     pinRequired = await pin.isSet;
     unlocked = !pinRequired;
+    policy = AccessPolicy(_freeUntilOverride ?? await FreeUntilSource(kv).cached());
+    await touchClock();
     await _loadStore();
     if (_presetType != null && config == null) {
       await saveConfig(StoreConfig.forType(_presetType));
     }
     ready = true;
     notifyListeners();
+    if (_freeUntilOverride == null) _refreshFreeUntil();
     _autoBackup();
   }
 
@@ -200,7 +241,7 @@ class AppController extends ChangeNotifier {
     }
     await file.writeAsBytes(raw, flush: true);
     db = openAppDatabase();
-    repo = Repository(db);
+    repo = Repository(db, isLocked: () => readOnly);
     await _loadStore();
     notifyListeners();
   }

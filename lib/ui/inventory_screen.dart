@@ -56,7 +56,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
     final cfg = context.app.cfg;
     return Scaffold(
       floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const ProductFormPage())),
+        onPressed: () => canWrite(context) ? Navigator.push(context, MaterialPageRoute(builder: (_) => const ProductFormPage())) : null,
         icon: const Icon(Icons.add),
         label: const Text('صنف جديد'),
       ),
@@ -411,7 +411,7 @@ class _ProductDetailPageState extends State<ProductDetailPage> {
         IconButton(icon: const Icon(Icons.delete_outline), onPressed: _delete),
       ]),
       floatingActionButton: FloatingActionButton.extended(
-          onPressed: () => showBatchDialog(context, p.id), icon: const Icon(Icons.add), label: const Text('إضافة كمية')),
+          onPressed: () => canWrite(context) ? showBatchDialog(context, p.id) : null, icon: const Icon(Icons.add), label: const Text('إضافة كمية')),
       body: Centered(
         child: StreamBuilder<List<StockBatch>>(
           stream: context.repo.watchBatches(p.id),

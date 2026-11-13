@@ -16,7 +16,7 @@ Future<AppController> boot(WidgetTester t,
   t.view.physicalSize = size;
   t.view.devicePixelRatio = 1.0;
   addTearDown(t.view.reset);
-  final c = AppController(database: AppDatabase.memory(), kvStore: kv ?? MemoryKv(), forceSignedIn: activated, presetType: type);
+  final c = AppController(database: AppDatabase.memory(), kvStore: kv ?? MemoryKv(), forceSignedIn: activated, presetType: type, freeUntil: DateTime(2100));
   await t.pumpWidget(NasaqApp(controller: c));
   await t.runAsync(() => c.init());
   await t.pump(const Duration(milliseconds: 100));
@@ -138,7 +138,7 @@ void main() {
     t.view.physicalSize = const Size(420, 1400);
     t.view.devicePixelRatio = 1.0;
     addTearDown(t.view.reset);
-    final c = AppController(database: db, kvStore: MemoryKv(), forceSignedIn: true, presetType: BusinessType.supermarket);
+    final c = AppController(database: db, kvStore: MemoryKv(), forceSignedIn: true, presetType: BusinessType.supermarket, freeUntil: DateTime(2100));
     await t.pumpWidget(NasaqApp(controller: c));
     await t.runAsync(() => c.init());
     await t.runAsync(() => Future.delayed(const Duration(milliseconds: 300)));
@@ -228,7 +228,7 @@ void main() {
     t.view.physicalSize = const Size(700, 1800);
     t.view.devicePixelRatio = 1.0;
     addTearDown(t.view.reset);
-    final c = AppController(database: db, kvStore: MemoryKv(), forceSignedIn: true, presetType: BusinessType.supermarket);
+    final c = AppController(database: db, kvStore: MemoryKv(), forceSignedIn: true, presetType: BusinessType.supermarket, freeUntil: DateTime(2100));
     await t.pumpWidget(NasaqApp(controller: c));
     await t.runAsync(() => c.init());
     await settle(t);
@@ -271,7 +271,7 @@ void main() {
     t.view.physicalSize = const Size(420, 1200);
     t.view.devicePixelRatio = 1.0;
     addTearDown(t.view.reset);
-    final c = AppController(database: db, kvStore: MemoryKv(), forceSignedIn: true, presetType: BusinessType.supermarket);
+    final c = AppController(database: db, kvStore: MemoryKv(), forceSignedIn: true, presetType: BusinessType.supermarket, freeUntil: DateTime(2100));
     await t.pumpWidget(NasaqApp(controller: c));
     await t.runAsync(() => c.init());
     await settle(t);

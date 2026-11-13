@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../app_state.dart';
+import '../core/format.dart';
 import 'common.dart';
 import 'dashboard_screen.dart';
 import 'cash_screen.dart';
@@ -51,6 +52,7 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState s) {
     if (s == AppLifecycleState.paused) _pausedAt = DateTime.now();
+    if (s == AppLifecycleState.resumed) context.app.touchClock();
     if (s == AppLifecycleState.resumed && _pausedAt != null) {
       if (DateTime.now().difference(_pausedAt!) > const Duration(minutes: 1)) context.app.lock();
       _pausedAt = null;
@@ -61,6 +63,7 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
   Widget build(BuildContext context) {
     final wide = isWide(context);
     final page = KeyedSubtree(key: ValueKey(_i), child: _tabs[_i].page());
+    final banner = _AccessBanner(app: context.app);
     return Scaffold(
       appBar: AppBar(
         title: Text(_tabs[_i].label),
@@ -81,9 +84,9 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
                 ],
               ),
               const VerticalDivider(width: 1),
-              Expanded(child: page),
+              Expanded(child: Column(children: [banner, Expanded(child: page)])),
             ])
-          : page,
+          : Column(children: [banner, Expanded(child: page)]),
       bottomNavigationBar: wide
           ? null
           : NavigationBar(
@@ -96,6 +99,51 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
                   NavigationDestination(icon: Icon(t.icon), selectedIcon: Icon(t.selected), label: t.label),
               ],
             ),
+    );
+  }
+}
+
+/// شريط الحالة: يذكّر بنهاية الفترة المجانية، وبعدها يوضّح أن التطبيق للقراءة فقط.
+class _AccessBanner extends StatelessWidget {
+  final AppController app;
+  const _AccessBanner({required this.app});
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    if (app.readOnly) {
+      return Material(
+        color: cs.errorContainer,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          child: Row(children: [
+            Icon(Icons.lock_clock, size: 20, color: cs.onErrorContainer),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text('انتهت الفترة المجانية: التطبيق للقراءة والتصدير فقط. بياناتك محفوظة والاشتراك قريباً.',
+                  style: TextStyle(color: cs.onErrorContainer, fontSize: 13)),
+            ),
+          ]),
+        ),
+      );
+    }
+    final d = app.freeDaysLeft;
+    final until = dateFmt(app.policy.freeUntil);
+    return Material(
+      color: d <= 14 ? cs.tertiaryContainer : cs.primaryContainer,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        child: Row(children: [
+          Icon(Icons.card_giftcard, size: 18, color: d <= 14 ? cs.onTertiaryContainer : cs.onPrimaryContainer),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              d == 0 ? 'آخر يوم مجاني ($until) ثم يصبح التطبيق باشتراك' : 'مجاني حتى $until (باقي $d يوم) ثم يصبح التطبيق باشتراك',
+              style: TextStyle(color: d <= 14 ? cs.onTertiaryContainer : cs.onPrimaryContainer, fontSize: 12.5),
+            ),
+          ),
+        ]),
+      ),
     );
   }
 }

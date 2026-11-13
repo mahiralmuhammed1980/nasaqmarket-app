@@ -12,6 +12,12 @@ class InsufficientStock implements Exception {
       'الكمية غير كافية للصنف "$productName": المطلوب ${qtyFmt(requested)} والمتاح ${qtyFmt(available)}';
 }
 
+/// يُرمى عند محاولة تعديل البيانات بعد انتهاء الفترة المجانية (وضع القراءة فقط).
+class ReadOnlyMode implements Exception {
+  @override
+  String toString() => 'انتهت الفترة المجانية: التطبيق للقراءة والتصدير فقط حتى تفعيل الاشتراك';
+}
+
 /// يُظهر المقاس واللون مع اسم الصنف (لأصناف الألبسة والأحذية).
 extension ProductLabel on Product {
   String get displayName =>
@@ -78,13 +84,23 @@ class BatchInfo {
 /// طبقة العمليات على قاعدة البيانات: المخزون، المبيعات، المشتريات.
 class Repository {
   final AppDatabase db;
-  Repository(this.db);
+
+  /// يعيد true في وضع القراءة فقط؛ تُرفض عندها عمليات الإضافة والتعديل الرئيسية.
+  final bool Function() isLocked;
+  Repository(this.db, {this.isLocked = _never});
+  static bool _never() => false;
+
+  void _w() {
+    if (isLocked()) throw ReadOnlyMode();
+  }
 
   // ───────── الموردون ─────────
   Stream<List<Supplier>> watchSuppliers() =>
       (db.select(db.suppliers)..orderBy([(t) => OrderingTerm.asc(t.name)])).watch();
-  Future<int> saveSupplier(SuppliersCompanion s) =>
-      db.into(db.suppliers).insertOnConflictUpdate(s);
+  Future<int> saveSupplier(SuppliersCompanion s) {
+    _w();
+    return db.into(db.suppliers).insertOnConflictUpdate(s);
+  }
   Future<void> deleteSupplier(int id) async {
     final used = await (db.select(db.purchaseOrders)..where((t) => t.supplierId.equals(id))).get();
     if (used.isNotEmpty) {
@@ -98,8 +114,10 @@ class Repository {
   }
 
   // ───────── الأصناف ─────────
-  Future<int> saveProduct(ProductsCompanion p) =>
-      db.into(db.products).insertOnConflictUpdate(p);
+  Future<int> saveProduct(ProductsCompanion p) {
+    _w();
+    return db.into(db.products).insertOnConflictUpdate(p);
+  }
 
   Future<Product?> productById(int id) =>
       (db.select(db.products)..where((t) => t.id.equals(id))).getSingleOrNull();
@@ -188,8 +206,9 @@ class Repository {
     required List<String> sizes,
     required List<String> colors,
     double initialQty = 0,
-  }) =>
-      db.transaction(() async {
+  }) {
+    _w();
+    return db.transaction(() async {
         final ids = <int>[];
         final ss = sizes.isEmpty ? [''] : sizes;
         final cs = colors.isEmpty ? [''] : colors;
@@ -209,14 +228,17 @@ class Repository {
         }
         return ids;
       });
+  }
 
   // ───────── الدفعات ─────────
   Stream<List<StockBatch>> watchBatches(int productId) => (db.select(db.batches)
         ..where((t) => t.productId.equals(productId))
         ..orderBy([(t) => OrderingTerm.asc(t.expiry)]))
       .watch();
-  Future<int> saveBatch(BatchesCompanion b) =>
-      db.into(db.batches).insertOnConflictUpdate(b);
+  Future<int> saveBatch(BatchesCompanion b) {
+    _w();
+    return db.into(db.batches).insertOnConflictUpdate(b);
+  }
   Future<void> deleteBatch(int id) async {
     final used = await (db.select(db.invoiceItemBatches)..where((t) => t.batchId.equals(id))).get();
     if (used.isNotEmpty) {
@@ -268,6 +290,7 @@ class Repository {
     String notes = '',
     DateTime? now,
   }) {
+    _w();
     if (lines.isEmpty) throw ArgumentError('الفاتورة بلا أصناف');
     final when = now ?? DateTime.now();
     return db.transaction(() async {
@@ -460,8 +483,9 @@ class Repository {
     required List<PurchaseOrderItemsCompanion Function(int orderId)> items,
     String notes = '',
     String status = 'draft',
-  }) =>
-      db.transaction(() async {
+  }) {
+    _w();
+    return db.transaction(() async {
         final id = await db.into(db.purchaseOrders).insert(PurchaseOrdersCompanion.insert(
             supplierId: supplierId,
             createdAt: DateTime.now(),
@@ -472,6 +496,7 @@ class Repository {
         }
         return id;
       });
+  }
 
   Future<void> setOrderStatus(int orderId, String status) async {
     final o = await (db.select(db.purchaseOrders)..where((t) => t.id.equals(orderId))).getSingle();
@@ -490,7 +515,9 @@ class Repository {
   }
 
   /// استلام الأمر: كل بند يتحول إلى دفعة في المخزون، مرة واحدة فقط.
-  Future<void> receiveOrder(int orderId, {int paid = 0, String method = 'cash'}) => db.transaction(() async {
+  Future<void> receiveOrder(int orderId, {int paid = 0, String method = 'cash'}) {
+    _w();
+    return db.transaction(() async {
         final o = await (db.select(db.purchaseOrders)..where((t) => t.id.equals(orderId))).getSingle();
         if (o.status == 'received') throw StateError('الأمر مستلم سابقاً');
         if (o.status == 'cancelled') throw StateError('الأمر ملغى');
@@ -525,6 +552,7 @@ class Repository {
               supplierId: o.supplierId);
         }
       });
+  }
 
   int orderTotal(List<PurchaseOrderItem> items) =>
       items.fold<int>(0, (a, i) => a + (i.quantity * i.unitCost).round());
@@ -564,6 +592,7 @@ class Repository {
     String note = '',
     DateTime? at,
   }) async {
+    _w();
     if (amount <= 0) throw ArgumentError('المبلغ يجب أن يكون أكبر من صفر');
     final sign = switch (kind) {
       'opening' || 'owner_in' => 1,
@@ -581,6 +610,7 @@ class Repository {
     String note = '',
     DateTime? at,
   }) async {
+    _w();
     if (amount <= 0) throw ArgumentError('المبلغ يجب أن يكون أكبر من صفر');
     return _cash(
         kind: 'supplier_payment',
@@ -623,7 +653,9 @@ class Repository {
   Future<CashSummary> cashSummary({DateTime? from, DateTime? to}) => watchCashSummary(from: from, to: to).first;
 
   /// إغلاق اليوم: يطابق الرصيد النقدي الفعلي مع رصيد النظام ويسجّل الفرق كتسوية.
-  Future<CashClosing> closeDay(int counted, {String note = ''}) => db.transaction(() async {
+  Future<CashClosing> closeDay(int counted, {String note = ''}) {
+    _w();
+    return db.transaction(() async {
         if (counted < 0) throw ArgumentError('المبلغ لا يمكن أن يكون سالباً');
         final system = (await cashSummary()).cashBalance;
         final diff = counted - system;
@@ -639,6 +671,7 @@ class Repository {
         }
         return (db.select(db.cashClosings)..where((t) => t.id.equals(id))).getSingle();
       });
+  }
 
   Stream<List<CashClosing>> watchClosings() =>
       (db.select(db.cashClosings)..orderBy([(t) => OrderingTerm.desc(t.createdAt)])).watch();

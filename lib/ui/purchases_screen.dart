@@ -36,7 +36,7 @@ class _SuppliersTab extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Scaffold(
         floatingActionButton: FloatingActionButton.extended(
-            onPressed: () => showSupplierDialog(context), icon: const Icon(Icons.add), label: const Text('مورد جديد')),
+            onPressed: () => canWrite(context) ? showSupplierDialog(context) : null, icon: const Icon(Icons.add), label: const Text('مورد جديد')),
         body: StreamBuilder<List<Supplier>>(
           stream: context.repo.watchSuppliers(),
           builder: (ctx, snap) {
@@ -163,7 +163,7 @@ class _OrdersTab extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Scaffold(
         floatingActionButton: FloatingActionButton.extended(
-          onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const OrderFormPage())),
+          onPressed: () => canWrite(context) ? Navigator.push(context, MaterialPageRoute(builder: (_) => const OrderFormPage())) : null,
           icon: const Icon(Icons.add),
           label: const Text('أمر شراء'),
         ),

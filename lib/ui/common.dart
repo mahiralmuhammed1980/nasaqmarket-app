@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../app_state.dart';
+
 const kBreakpoint = 720.0;
 bool isWide(BuildContext c) => MediaQuery.sizeOf(c).width >= kBreakpoint;
 
@@ -10,6 +12,13 @@ void snack(BuildContext c, String msg, {bool error = false}) {
     content: Text(msg),
     backgroundColor: error ? Theme.of(c).colorScheme.error : null,
   ));
+}
+
+/// يمنع الإضافة/التعديل بعد انتهاء الفترة المجانية ويعرض سبب المنع. true = مسموح.
+bool canWrite(BuildContext c) {
+  if (!c.appRead.readOnly) return true;
+  snack(c, 'انتهت الفترة المجانية: التطبيق للقراءة والتصدير فقط حتى تفعيل الاشتراك', error: true);
+  return false;
 }
 
 Future<bool> confirm(BuildContext c, String title, {String? body, String ok = 'تأكيد', bool danger = false}) async {
