@@ -65,3 +65,8 @@ kotlin {
 flutter {
     source = "../.."
 }
+
+// Firebase: يُفعَّل فقط عند وجود google-services.json (يضعه المطوّر/الـ CI).
+if (file("google-services.json").exists()) {
+    apply(plugin = "com.google.gms.google-services")
+}

@@ -1,3 +1,5 @@
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_core/firebase_core.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 
 import 'backup.dart';
@@ -41,12 +43,20 @@ class AuthService {
       final email = acct.email.toLowerCase();
       if (email.isEmpty) throw AuthException('الحساب لا يحتوي بريداً إلكترونياً');
       await drive.verifyAccess();
+      // دخول Firebase بنفس حساب Google (لازم لقواعد الترخيص). بدون google-services.json يُتخطى.
+      if (Firebase.apps.isNotEmpty) {
+        final idToken = acct.authentication.idToken;
+        if (idToken == null) throw AuthException('تعذّر الحصول على رمز الدخول من Google');
+        await FirebaseAuth.instance.signInWithCredential(GoogleAuthProvider.credential(idToken: idToken));
+      }
       final now = DateTime.now();
       await kv.write(_kEmail, email);
       await kv.write(_kAt, '${now.millisecondsSinceEpoch}');
       return Account(email, now);
     } on BackupException catch (e) {
       throw AuthException(e.message);
+    } on FirebaseAuthException catch (e) {
+      throw AuthException('تعذّر تسجيل الدخول: ${e.message ?? e.code}');
     } on GoogleSignInException catch (e) {
       if (e.code == GoogleSignInExceptionCode.canceled) {
         throw AuthException('أُلغي تسجيل الدخول. التسجيل بحساب Google مطلوب لاستخدام التطبيق.');
@@ -68,6 +78,7 @@ class AuthService {
     try {
       await ensureGoogleInit();
       await GoogleSignIn.instance.signOut();
+      if (Firebase.apps.isNotEmpty) await FirebaseAuth.instance.signOut();
     } catch (_) {}
     await kv.delete(_kEmail);
     await kv.delete(_kAt);

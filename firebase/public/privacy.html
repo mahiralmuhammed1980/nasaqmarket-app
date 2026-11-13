@@ -21,7 +21,10 @@
 <p>نسق ماركت تطبيق أندرويد للمحاسبة وإدارة المخزون للمحلات التجارية (بقالية، ملابس، أحذية، كهربائيات وغيرها). بيانات المحل (الأصناف، الكميات، الفواتير، المشتريات، أسماء وأرقام الزبائن إن أدخلها المستخدم) تُخزَّن <strong>على جهاز المستخدم</strong> ولا تُرسل إلى خوادمنا، ونحن لا نملك خادماً يحتفظ بها.</p>
 
 <h2>تسجيل الدخول بحساب Google</h2>
-<p>يتطلب التطبيق تسجيل الدخول بحساب Google ليضمن توفر Google Drive للنسخ الاحتياطي. يُحفظ البريد الإلكتروني للحساب على جهاز المستخدم فقط لعرضه ولتأكيد ملكية الحساب عند نسيان رمز القفل. لا نرسل البريد ولا نخزّنه على خوادمنا.</p>
+<p>يتطلب التطبيق تسجيل الدخول بحساب Google ليضمن توفر Google Drive للنسخ الاحتياطي. يُحفظ البريد الإلكتروني للحساب على جهاز المستخدم لعرضه ولتأكيد ملكية الحساب عند نسيان رمز القفل، ويُحفظ أيضاً ضمن سجل الترخيص عند تفعيل كود (انظر بيانات التفعيل).</p>
+
+<h2>بيانات التفعيل</h2>
+<p>عند إدخال كود تفعيل يحفظ التطبيق في خدمة Google Firebase (Cloud Firestore) سجل ترخيص يحتوي: معرّف حسابك والبريد الإلكتروني ومعرّف الجهاز وتاريخ بدء الاشتراك ومدته، لربط الاشتراك بحسابك وجهازك ونقله إلى جهاز جديد. لا تُخزَّن فيه أي بيانات تخص محلك أو زبائنك.</p>
 
 <h2>النسخ الاحتياطي على Google Drive</h2>
 <p>يحفظ التطبيق نسخة احتياطية من بيانات المحل في <strong>مجلد التطبيق المخفي</strong> (appDataFolder) داخل حساب Google Drive الخاص بالمستخدم، بالنطاق <code>drive.appdata</code> فقط. لا يستطيع التطبيق قراءة أي ملف آخر في Drive، ولا يصل المطوّر إلى هذه النسخ. تتيح هذه النسخ استعادة البيانات عند تبديل الهاتف أو فقدانه.</p>
@@ -30,7 +33,7 @@
 <p>تُستخدم الكاميرا لمسح الباركود فقط. لا تُحفظ الصور ولا تُرسل.</p>
 
 <h2>مشاركة البيانات</h2>
-<p>لا نبيع البيانات ولا نشاركها مع أي جهة. الخدمات الوحيدة المستخدمة هي Google Sign-In وGoogle Drive وفق سياسات Google. عند تفعيل الاشتراكات لاحقاً ستتم المدفوعات عبر Google Play وفق سياساته.</p>
+<p>لا نبيع البيانات ولا نشاركها مع أي جهة. الخدمات المستخدمة هي Google Sign-In وGoogle Drive وFirebase وفق سياسات Google. تتم المدفوعات عبر مندوبي البيع، ولاحقاً قد تتم عبر Google Play وفق سياساته.</p>
 
 <h2>حذف البيانات</h2>
 <p>حذف التطبيق من الجهاز يحذف بياناته المحلية. يستطيع المستخدم حذف النسخ الاحتياطية من إعدادات Google Drive (إدارة بيانات التطبيقات).</p>
@@ -42,9 +45,10 @@
 <h1>Privacy Policy - Nasaq Market</h1>
 <p><strong>Your store data stays on your device.</strong> Nasaq Market stores inventory, sales, invoices and purchasing data locally on the user's Android device. It is not sent to our servers, and we operate no server that holds it.</p>
 <p><strong>Google sign-in:</strong> required so that Google Drive is available for backup. The account email is kept on the device only.</p>
+<p><strong>Activation data:</strong> when you redeem an activation code, a license record (account ID, email, device identifier, subscription start and length) is stored in Google Firebase (Cloud Firestore) to bind the subscription to your account and device and to move it to a new device. No store or customer data is kept there.</p>
 <p><strong>Google Drive backup:</strong> backups are saved in the app's hidden application-data folder in the user's own Drive (scope <code>drive.appdata</code> only). The app cannot read any other Drive file and the developer cannot access these backups.</p>
 <p><strong>Camera:</strong> used only to scan barcodes. Images are neither stored nor sent.</p>
-<p><strong>Sharing:</strong> we do not sell or share data. Services used: Google Sign-In and Google Drive, under Google's policies. Future subscription payments are processed by Google Play.</p>
+<p><strong>Sharing:</strong> we do not sell or share data. Services used: Google Sign-In, Google Drive and Firebase, under Google's policies. Payments are made through sales agents, and later may be processed by Google Play.</p>
 <p><strong>Deletion:</strong> uninstalling removes local data; backups can be deleted from Google Drive settings (manage app data).</p>
 <p><strong>Contact:</strong> CONTACT_EMAIL</p>
 </div>

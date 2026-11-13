@@ -1,0 +1,107 @@
+rules_version = '2';
+// قواعد Firestore لـ «نسق ماركت» (بلا Cloud Functions، تعمل على الخطة المجانية Spark).
+//
+//  codes/{sha256(code)} : تنشئها أنت بسكربت tool/gen_codes.py (يتجاوز القواعد بحساب الخدمة).
+//                         {plan: '6m'|'12m'|'life', agent, batch, status: 'available'|'redeemed', ...}
+//                         معرّف المستند هو بصمة الكود، فلا يُخزَّن الكود نفسه.
+//  licenses/{uid}       : ينشئه التطبيق عند أول استهلاك كود، ويمدّده كود آخر، وتنقله إلى جهاز جديد.
+//
+// كل الأوقات من request.time (وقت الخادم) فلا تعتمد على ساعة الهاتف.
+// الأيام هنا تطابق LicensePlan في lib/services/license.dart (6m=183، 12m=365)، وحد النقل 3 كل 30 يوماً.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null && request.auth.token.email_verified == true;
+    }
+    function mail() { return request.auth.token.email.lower(); }
+    function codeDoc(h) { return /databases/$(database)/documents/codes/$(h); }
+    function planDays(p) { return p == '6m' ? 183 : (p == '12m' ? 365 : 0); }
+
+    // الكود كان متاحاً قبل المعاملة ومُستهلَك بهذا المستخدم بعدها (كلاهما في الدفعة نفسها).
+    function redeemedNow(h) {
+      return get(codeDoc(h)).data.status == 'available'
+          && getAfter(codeDoc(h)).data.status == 'redeemed'
+          && getAfter(codeDoc(h)).data.redeemedBy == request.auth.uid;
+    }
+
+    match /codes/{h} {
+      allow get: if signedIn();
+      allow list, create, delete: if false;
+
+      // استهلاك مرة واحدة فقط: من available إلى redeemed، ولا يُعدَّل شيء آخر.
+      allow update: if signedIn()
+        && resource.data.status == 'available'
+        && request.resource.data.status == 'redeemed'
+        && request.resource.data.redeemedBy == request.auth.uid
+        && request.resource.data.redeemedAt == request.time
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'redeemedBy', 'redeemedAt']);
+    }
+
+    match /licenses/{u} {
+      allow get: if signedIn() && u == request.auth.uid;
+      allow list, delete: if false;
+
+      // أول ترخيص: لا يُنشأ إلا باستهلاك كود حقيقي.
+      allow create: if signedIn() && u == request.auth.uid
+        && request.resource.data.keys().hasOnly(['email', 'deviceId', 'activatedAt', 'windowStart', 'transferCount', 'startedAt', 'days', 'lifetime', 'lastCode'])
+        && request.resource.data.email == mail()
+        && request.resource.data.deviceId is string
+        && request.resource.data.transferCount == 0
+        && request.resource.data.activatedAt == request.time
+        && request.resource.data.windowStart == request.time
+        && request.resource.data.startedAt == request.time
+        && redeemedNow(request.resource.data.lastCode)
+        && request.resource.data.days == planDays(get(codeDoc(request.resource.data.lastCode)).data.plan)
+        && request.resource.data.lifetime == (get(codeDoc(request.resource.data.lastCode)).data.plan == 'life');
+
+      allow update: if signedIn() && u == request.auth.uid && (
+
+        // (أ) تمديد بكود جديد على الجهاز نفسه (لا يمسّ الجهاز ولا العدّادات)
+        ( resource.data.lifetime == false
+          && request.resource.data.deviceId == resource.data.deviceId
+          && request.resource.data.lastCode != resource.data.lastCode
+          && redeemedNow(request.resource.data.lastCode)
+          && (
+            // كود مدى الحياة
+            ( get(codeDoc(request.resource.data.lastCode)).data.plan == 'life'
+              && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['lifetime', 'lastCode'])
+              && request.resource.data.lifetime == true )
+            ||
+            // الاشتراك منتهٍ: تبدأ فترة جديدة من وقت الخادم
+            ( get(codeDoc(request.resource.data.lastCode)).data.plan != 'life'
+              && request.time >= resource.data.startedAt + duration.value(resource.data.days, 'd')
+              && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['startedAt', 'days', 'lastCode'])
+              && request.resource.data.startedAt == request.time
+              && request.resource.data.days == planDays(get(codeDoc(request.resource.data.lastCode)).data.plan) )
+            ||
+            // الاشتراك ساري: تُضاف الأيام إلى المتبقي
+            ( get(codeDoc(request.resource.data.lastCode)).data.plan != 'life'
+              && request.time < resource.data.startedAt + duration.value(resource.data.days, 'd')
+              && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['days', 'lastCode'])
+              && request.resource.data.days == resource.data.days + planDays(get(codeDoc(request.resource.data.lastCode)).data.plan) )
+          )
+        )
+
+        ||
+
+        // (ب) نقل الترخيص إلى جهاز جديد (تلقائي): 3 مرات كل 30 يوماً
+        ( request.resource.data.diff(resource.data).affectedKeys().hasOnly(['deviceId', 'activatedAt', 'windowStart', 'transferCount'])
+          && request.resource.data.deviceId is string
+          && request.resource.data.deviceId != resource.data.deviceId
+          && request.resource.data.activatedAt == request.time
+          && (
+            ( request.time < resource.data.windowStart + duration.value(30, 'd')
+              && resource.data.transferCount < 3
+              && request.resource.data.transferCount == resource.data.transferCount + 1
+              && request.resource.data.windowStart == resource.data.windowStart )
+            ||
+            ( request.time >= resource.data.windowStart + duration.value(30, 'd')
+              && request.resource.data.transferCount == 1
+              && request.resource.data.windowStart == request.time )
+          )
+        )
+      );
+    }
+  }
+}

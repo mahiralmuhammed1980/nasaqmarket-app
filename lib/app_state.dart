@@ -7,6 +7,7 @@ import 'data/database.dart';
 import 'data/repository.dart';
 import 'services/backup.dart';
 import 'services/kv_store.dart';
+import 'services/license.dart';
 import 'core/business.dart';
 import 'core/format.dart';
 import 'services/access.dart';
@@ -46,6 +47,7 @@ class AppController extends ChangeNotifier {
   final DriveBackupService drive = DriveBackupService();
   late final AuthService auth = AuthService(kv, drive);
   late final PinManager pin = PinManager(kv);
+  late final LicenseService license = LicenseService(LicenseVault(kv));
 
   bool ready = false;
   Account? account;
@@ -78,11 +80,34 @@ class AppController extends ChangeNotifier {
     if (readOnly != before) notifyListeners();
   }
 
+  void _setPaid(Entitlement? e) {
+    policy = AccessPolicy(policy.freeUntil, paid: e);
+    notifyListeners();
+  }
+
+  /// مزامنة صامتة للترخيص من الخادم عند فتح التطبيق/تسجيل الدخول. تفشل بصمت دون اتصال
+  /// (يبقى الترخيص المحلي الموقّع صالحاً للعمل دون إنترنت).
+  Future<void> _syncLicense() async {
+    if (!signedIn || !LicenseService.firebaseReady || devBypass) return;
+    try {
+      _setPaid(await license.sync());
+    } on LicenseException {
+      // مثلاً تجاوز حد النقل: لا نمسح الترخيص المحلي هنا؛ يظهر الخطأ عند الإدخال اليدوي.
+    } catch (_) {}
+  }
+
+  /// تفعيل كود مندوب. يرمي [LicenseException] برسالة عربية واضحة.
+  Future<Entitlement> redeemCode(String code) async {
+    final e = await license.redeem(code);
+    _setPaid(e);
+    return e;
+  }
+
   Future<void> _refreshFreeUntil() async {
     final src = FreeUntilSource(kv);
     final d = await src.refresh();
     if (d != null) {
-      policy = AccessPolicy(d, subscribed: policy.subscribed);
+      policy = AccessPolicy(d, paid: policy.paid);
       notifyListeners();
     }
   }
@@ -100,7 +125,8 @@ class AppController extends ChangeNotifier {
     }
     pinRequired = await pin.isSet;
     unlocked = !pinRequired;
-    policy = AccessPolicy(_freeUntilOverride ?? await FreeUntilSource(kv).cached());
+    final local = await license.local();
+    policy = AccessPolicy(_freeUntilOverride ?? await FreeUntilSource(kv).cached(), paid: local?.entitlement);
     await touchClock();
     await _loadStore();
     if (_presetType != null && config == null) {
@@ -109,6 +135,7 @@ class AppController extends ChangeNotifier {
     ready = true;
     notifyListeners();
     if (_freeUntilOverride == null) _refreshFreeUntil();
+    _syncLicense();
     _autoBackup();
   }
 
@@ -122,10 +149,13 @@ class AppController extends ChangeNotifier {
   Future<void> signIn() async {
     account = await auth.signIn();
     notifyListeners();
+    _syncLicense();
   }
 
   Future<void> signOut() async {
     await auth.signOut();
+    await license.clear();
+    policy = AccessPolicy(policy.freeUntil);
     account = null;
     notifyListeners();
   }

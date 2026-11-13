@@ -17,7 +17,7 @@ void snack(BuildContext c, String msg, {bool error = false}) {
 /// يمنع الإضافة/التعديل بعد انتهاء الفترة المجانية ويعرض سبب المنع. true = مسموح.
 bool canWrite(BuildContext c) {
   if (!c.appRead.readOnly) return true;
-  snack(c, 'انتهت الفترة المجانية: التطبيق للقراءة والتصدير فقط حتى تفعيل الاشتراك', error: true);
+  snack(c, 'انتهت الفترة المجانية: التطبيق للقراءة والتصدير فقط. فعّل كوداً من مندوبك من «المزيد ← الإعدادات».', error: true);
   return false;
 }
 

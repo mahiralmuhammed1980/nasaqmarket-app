@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 import 'kv_store.dart';
+import 'license.dart';
 
 /// نهاية الفترة المجانية (نهاية هذا اليوم). غيّره عند النشر.
 /// التطبيق مجاني التحميل دائماً؛ بعد هذا التاريخ يصبح الدخول للقراءة والتصدير فقط
@@ -13,17 +14,24 @@ final DateTime kFreeUntil = DateTime(2027, 3, 1);
 /// يُمرَّر عند البناء: --dart-define=FREE_UNTIL_URL=https://.../free_until.json
 const kFreeUntilUrl = String.fromEnvironment('FREE_UNTIL_URL');
 
-/// حالة الوصول: فترة مجانية أو قراءة فقط.
+/// حالة الوصول: فترة مجانية، أو مدفوع (كود مندوب)، أو قراءة فقط.
 class AccessPolicy {
   final DateTime freeUntil;
-  final bool subscribed;
-  const AccessPolicy(this.freeUntil, {this.subscribed = false});
+
+  /// استحقاق مدفوع من كود تفعيل (null = لا يوجد).
+  final Entitlement? paid;
+  const AccessPolicy(this.freeUntil, {this.paid});
 
   /// يوم آخر يوم مجاني ينتهي عند نهايته.
   DateTime get _end => DateTime(freeUntil.year, freeUntil.month, freeUntil.day + 1);
 
   bool isFree(DateTime now) => now.isBefore(_end);
-  bool readOnly(DateTime now) => !subscribed && !isFree(now);
+  bool isPaid(DateTime now) => paid?.active(now) ?? false;
+  bool get lifetime => paid?.lifetime ?? false;
+  DateTime? get paidUntil => paid?.paidUntil;
+
+  /// قراءة فقط: انتهت الفترة المجانية وليس هناك استحقاق مدفوع ساري.
+  bool readOnly(DateTime now) => !isPaid(now) && !isFree(now);
 
   /// الأيام المتبقية في الفترة المجانية (0 = آخر يوم).
   int daysLeft(DateTime now) {
@@ -31,6 +39,13 @@ class AccessPolicy {
         .difference(DateTime(now.year, now.month, now.day))
         .inDays;
     return d < 0 ? 0 : d;
+  }
+
+  /// الأيام المتبقية في الاشتراك المدفوع (null لمدى الحياة أو بلا اشتراك).
+  int? paidDaysLeft(DateTime now) {
+    final u = paidUntil;
+    if (lifetime || u == null || !now.isBefore(u)) return null;
+    return u.difference(now).inDays;
   }
 }
 

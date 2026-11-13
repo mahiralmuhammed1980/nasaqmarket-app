@@ -24,16 +24,21 @@ jobs:
       - name: التحقق من الأسرار المطلوبة
         env:
           KS: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-        run: test -n "$KS" || { echo "::error::السر ANDROID_KEYSTORE_BASE64 مفقود (مفتاح الرفع ضروري)"; exit 1; }
+          GS: ${{ secrets.GOOGLE_SERVICES_JSON_BASE64 }}
+        run: |
+          test -n "$KS" || { echo "::error::السر ANDROID_KEYSTORE_BASE64 مفقود (مفتاح التوقيع ضروري)"; exit 1; }
+          test -n "$GS" || { echo "::error::السر GOOGLE_SERVICES_JSON_BASE64 مفقود (التفعيل بالأكواد يحتاجه)"; exit 1; }
 
       - name: مفتاح التوقيع
         env:
           KS: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          GS: ${{ secrets.GOOGLE_SERVICES_JSON_BASE64 }}
           KS_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           KEY_PASS: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           echo "$KS" | base64 -d > android/app/release.jks
+          echo "$GS" | base64 -d > android/app/google-services.json
           cat > android/key.properties <<EOF
           storeFile=app/release.jks
           storePassword=$KS_PASS
@@ -48,7 +53,11 @@ jobs:
       - name: بناء AAB
         env:
           GOOGLE_SERVER_CLIENT_ID: ${{ secrets.GOOGLE_SERVER_CLIENT_ID }}
-        run: flutter build appbundle --release --dart-define=GOOGLE_SERVER_CLIENT_ID="$GOOGLE_SERVER_CLIENT_ID"
+          LICENSE_SECRET: ${{ secrets.LICENSE_SECRET }}
+        run: |
+          flutter build appbundle --release \
+            --dart-define=GOOGLE_SERVER_CLIENT_ID="$GOOGLE_SERVER_CLIENT_ID" \
+            --dart-define=LICENSE_SECRET="$LICENSE_SECRET"
 
       - uses: actions/upload-artifact@v4
         with:

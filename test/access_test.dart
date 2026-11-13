@@ -9,6 +9,7 @@ import 'package:nasaq_market/data/database.dart';
 import 'package:nasaq_market/data/repository.dart';
 import 'package:nasaq_market/services/access.dart';
 import 'package:nasaq_market/services/kv_store.dart';
+import 'package:nasaq_market/services/license.dart';
 import 'package:nasaq_market/ui/app.dart';
 
 void main() {
@@ -22,8 +23,18 @@ void main() {
       expect(p.readOnly(DateTime(2027, 3, 2)), isTrue);
       expect(p.readOnly(DateTime(2027, 1, 1)), isFalse);
     });
-    test('المشترك لا يدخل وضع القراءة فقط', () {
-      expect(AccessPolicy(DateTime(2027, 3, 1), subscribed: true).readOnly(DateTime(2030)), isFalse);
+    test('الاستحقاق المدفوع الساري يفتح التطبيق بعد انتهاء المجاني', () {
+      final paid = AccessPolicy(DateTime(2027, 3, 1), paid: Entitlement(paidUntil: DateTime(2027, 9, 1)));
+      expect(paid.readOnly(DateTime(2027, 6, 1)), isFalse);
+      expect(paid.paidDaysLeft(DateTime(2027, 8, 20)), 12);
+      // انتهى الاشتراك: عودة للقراءة فقط
+      expect(paid.readOnly(DateTime(2027, 9, 2)), isTrue);
+      expect(paid.paidDaysLeft(DateTime(2027, 9, 2)), isNull);
+    });
+    test('مدى الحياة لا ينتهي', () {
+      final life = AccessPolicy(DateTime(2027, 3, 1), paid: const Entitlement(lifetime: true));
+      expect(life.readOnly(DateTime(2060)), isFalse);
+      expect(life.paidDaysLeft(DateTime(2030)), isNull);
     });
     test('الأيام المتبقية', () {
       expect(p.daysLeft(DateTime(2027, 2, 20, 15)), 9);

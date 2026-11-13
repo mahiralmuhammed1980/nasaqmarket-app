@@ -54,3 +54,6 @@ android/app/google-services.json
 *.keystore
 
 build/
+firebase/test/node_modules/
+firebase/test/package-lock.json
+*.csv

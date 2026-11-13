@@ -8,6 +8,7 @@ import 'cash_screen.dart';
 import 'inventory_screen.dart';
 import 'purchases_screen.dart';
 import 'more_screen.dart';
+import 'redeem_screen.dart';
 import 'sales_screen.dart';
 
 class _Dest {
@@ -103,47 +104,58 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
   }
 }
 
-/// شريط الحالة: يذكّر بنهاية الفترة المجانية، وبعدها يوضّح أن التطبيق للقراءة فقط.
+/// شريط الحالة: فترة مجانية، أو اقتراب انتهاء الاشتراك، أو قراءة فقط مع زر إدخال الكود.
 class _AccessBanner extends StatelessWidget {
   final AppController app;
   const _AccessBanner({required this.app});
 
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    if (app.readOnly) {
-      return Material(
-        color: cs.errorContainer,
+  void _redeem(BuildContext c) => Navigator.push(c, MaterialPageRoute(builder: (_) => const RedeemScreen()));
+
+  Widget _bar(BuildContext context, Color bg, Color fg, IconData icon, String text, {String? action}) => Material(
+        color: bg,
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
           child: Row(children: [
-            Icon(Icons.lock_clock, size: 20, color: cs.onErrorContainer),
+            Icon(icon, size: 18, color: fg),
             const SizedBox(width: 8),
-            Expanded(
-              child: Text('انتهت الفترة المجانية: التطبيق للقراءة والتصدير فقط. بياناتك محفوظة والاشتراك قريباً.',
-                  style: TextStyle(color: cs.onErrorContainer, fontSize: 13)),
-            ),
+            Expanded(child: Text(text, style: TextStyle(color: fg, fontSize: 12.5))),
+            if (action != null)
+              TextButton(
+                onPressed: () => _redeem(context),
+                style: TextButton.styleFrom(foregroundColor: fg, visualDensity: VisualDensity.compact),
+                child: Text(action),
+              ),
           ]),
         ),
       );
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final now = app.effectiveNow;
+    final p = app.policy;
+    if (app.readOnly) {
+      return _bar(context, cs.errorContainer, cs.onErrorContainer, Icons.lock_clock,
+          'انتهت الفترة المجانية: للقراءة والتصدير فقط. بياناتك محفوظة.', action: 'أدخل كود');
+    }
+    if (p.isPaid(now)) {
+      final left = p.paidDaysLeft(now);
+      if (left != null && left <= 30) {
+        return _bar(context, cs.tertiaryContainer, cs.onTertiaryContainer, Icons.event_repeat,
+            'ينتهي اشتراكك بعد $left يوم (${dateFmt(p.paidUntil)}). جدّد بكود من مندوبك.', action: 'تجديد');
+      }
+      return const SizedBox.shrink();
     }
     final d = app.freeDaysLeft;
-    final until = dateFmt(app.policy.freeUntil);
-    return Material(
-      color: d <= 14 ? cs.tertiaryContainer : cs.primaryContainer,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-        child: Row(children: [
-          Icon(Icons.card_giftcard, size: 18, color: d <= 14 ? cs.onTertiaryContainer : cs.onPrimaryContainer),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              d == 0 ? 'آخر يوم مجاني ($until) ثم يصبح التطبيق باشتراك' : 'مجاني حتى $until (باقي $d يوم) ثم يصبح التطبيق باشتراك',
-              style: TextStyle(color: d <= 14 ? cs.onTertiaryContainer : cs.onPrimaryContainer, fontSize: 12.5),
-            ),
-          ),
-        ]),
-      ),
+    final until = dateFmt(p.freeUntil);
+    final soon = d <= 14;
+    return _bar(
+      context,
+      soon ? cs.tertiaryContainer : cs.primaryContainer,
+      soon ? cs.onTertiaryContainer : cs.onPrimaryContainer,
+      Icons.card_giftcard,
+      d == 0 ? 'آخر يوم مجاني ($until) ثم يصبح التطبيق باشتراك' : 'مجاني حتى $until (باقي $d يوم) ثم يصبح التطبيق باشتراك',
+      action: soon ? 'أدخل كود' : null,
     );
   }
 }

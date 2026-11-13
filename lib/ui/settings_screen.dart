@@ -6,6 +6,7 @@ import '../app_state.dart';
 import '../services/store_info.dart';
 import 'common.dart';
 import 'pin_screen.dart';
+import 'redeem_screen.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -126,6 +127,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
         const Divider(height: 40),
         Text('حول التطبيق', style: Theme.of(context).textTheme.titleMedium),
         ListTile(leading: const Icon(Icons.info_outline), title: const Text('الإصدار'), subtitle: Text(_version)),
+        ListTile(
+          leading: const Icon(Icons.key),
+          title: const Text('الاشتراك والتفعيل'),
+          subtitle: Text(accessStatusText(app)),
+          trailing: const Icon(Icons.chevron_left),
+          onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const RedeemScreen())),
+        ),
         ListTile(
           leading: const Icon(Icons.account_circle_outlined),
           title: const Text('حساب Google'),
