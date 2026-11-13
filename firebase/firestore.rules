@@ -4,6 +4,7 @@ rules_version = '2';
 //  codes/{sha256(code)} : تنشئها أنت بسكربت tool/gen_codes.py (يتجاوز القواعد بحساب الخدمة).
 //                         {plan: '6m'|'12m'|'life', agent, batch, status: 'available'|'redeemed', ...}
 //                         معرّف المستند هو بصمة الكود، فلا يُخزَّن الكود نفسه.
+//  users/{uid}          : تفضيلات التواصل الاختيارية (هاتف + موافقة إيميل/واتساب). يكتبها المستخدم لنفسه فقط.
 //  licenses/{uid}       : ينشئه التطبيق عند أول استهلاك كود، ويمدّده كود آخر، وتنقله إلى جهاز جديد.
 //
 // كل الأوقات من request.time (وقت الخادم) فلا تعتمد على ساعة الهاتف.
@@ -36,6 +37,21 @@ service cloud.firestore {
         && request.resource.data.redeemedBy == request.auth.uid
         && request.resource.data.redeemedAt == request.time
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'redeemedBy', 'redeemedAt']);
+    }
+
+    // تفضيلات التواصل: المستخدم يقرأ ويكتب ويحذف سجله فقط، ولا يستطيع أحد سرد المستخدمين.
+    // الفرز (من وافق) يتم من جهاز المطوّر بحساب الخدمة (tool/export_contacts.py).
+    match /users/{u} {
+      allow get, delete: if signedIn() && u == request.auth.uid;
+      allow list: if false;
+      allow create, update: if signedIn() && u == request.auth.uid
+        && request.resource.data.keys().hasOnly(['email', 'phone', 'marketingEmail', 'marketingWhatsapp', 'consentAt'])
+        && request.resource.data.email == mail()
+        && request.resource.data.phone is string
+        && request.resource.data.phone.size() <= 16
+        && request.resource.data.marketingEmail is bool
+        && request.resource.data.marketingWhatsapp is bool
+        && request.resource.data.consentAt == request.time;
     }
 
     match /licenses/{u} {

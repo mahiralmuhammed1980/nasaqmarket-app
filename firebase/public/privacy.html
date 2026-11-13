@@ -21,7 +21,10 @@
 <p>نسق ماركت تطبيق أندرويد للمحاسبة وإدارة المخزون للمحلات التجارية (بقالية، ملابس، أحذية، كهربائيات وغيرها). بيانات المحل (الأصناف، الكميات، الفواتير، المشتريات، أسماء وأرقام الزبائن إن أدخلها المستخدم) تُخزَّن <strong>على جهاز المستخدم</strong> ولا تُرسل إلى خوادمنا، ونحن لا نملك خادماً يحتفظ بها.</p>
 
 <h2>تسجيل الدخول بحساب Google</h2>
-<p>يتطلب التطبيق تسجيل الدخول بحساب Google ليضمن توفر Google Drive للنسخ الاحتياطي. يُحفظ البريد الإلكتروني للحساب على جهاز المستخدم لعرضه ولتأكيد ملكية الحساب عند نسيان رمز القفل، ويُحفظ أيضاً ضمن سجل الترخيص عند تفعيل كود (انظر بيانات التفعيل).</p>
+<p>يتطلب التطبيق تسجيل الدخول بحساب Google ليضمن توفر Google Drive للنسخ الاحتياطي. يُحفظ البريد الإلكتروني للحساب على جهاز المستخدم لعرضه ولتأكيد ملكية الحساب عند نسيان رمز القفل، ويحتفظ به Firebase Authentication عند تسجيل الدخول، ويُحفظ أيضاً ضمن سجل الترخيص عند تفعيل كود (انظر بيانات التفعيل)، وضمن بيانات التواصل إن وافقت.</p>
+
+<h2>بيانات التواصل (اختيارية)</h2>
+<p>بعد تسجيل الدخول نعرض شاشة اختيارية تتيح لك إدخال رقم هاتف/واتساب وتحديد موافقتك على تلقي التحديثات والعروض عبر البريد أو واتساب. إن وافقت نحفظ في Cloud Firestore: بريدك ورقمك وموافقتك ووقتها، ونستعملها لهذا الغرض فقط. الخانات غير مفعّلة افتراضياً، والتخطي لا يؤثر على استخدام التطبيق. تستطيع تغيير اختيارك أو حذف بيانات التواصل في أي وقت من «الإعدادات ← التواصل والعروض»، ويمكنك طلب حذف حسابك كلياً عبر التواصل معنا.</p>
 
 <h2>بيانات التفعيل</h2>
 <p>عند إدخال كود تفعيل يحفظ التطبيق في خدمة Google Firebase (Cloud Firestore) سجل ترخيص يحتوي: معرّف حسابك والبريد الإلكتروني ومعرّف الجهاز وتاريخ بدء الاشتراك ومدته، لربط الاشتراك بحسابك وجهازك ونقله إلى جهاز جديد. لا تُخزَّن فيه أي بيانات تخص محلك أو زبائنك.</p>
@@ -44,7 +47,8 @@
 <div class="en">
 <h1>Privacy Policy - Nasaq Market</h1>
 <p><strong>Your store data stays on your device.</strong> Nasaq Market stores inventory, sales, invoices and purchasing data locally on the user's Android device. It is not sent to our servers, and we operate no server that holds it.</p>
-<p><strong>Google sign-in:</strong> required so that Google Drive is available for backup. The account email is kept on the device only.</p>
+<p><strong>Google sign-in:</strong> required so that Google Drive is available for backup. The account email is kept on the device and by Firebase Authentication when you sign in.</p>
+<p><strong>Contact details (optional):</strong> after sign-in an optional screen lets you enter a phone/WhatsApp number and choose whether you agree to receive updates and offers by email or WhatsApp. If you agree we store your email, number, your choice and its time in Cloud Firestore, used for that purpose only. The boxes are off by default and skipping does not affect use of the app. You can change your choice or delete your contact details any time in Settings, and may ask us to delete your account entirely.</p>
 <p><strong>Activation data:</strong> when you redeem an activation code, a license record (account ID, email, device identifier, subscription start and length) is stored in Google Firebase (Cloud Firestore) to bind the subscription to your account and device and to move it to a new device. No store or customer data is kept there.</p>
 <p><strong>Google Drive backup:</strong> backups are saved in the app's hidden application-data folder in the user's own Drive (scope <code>drive.appdata</code> only). The app cannot read any other Drive file and the developer cannot access these backups.</p>
 <p><strong>Camera:</strong> used only to scan barcodes. Images are neither stored nor sent.</p>

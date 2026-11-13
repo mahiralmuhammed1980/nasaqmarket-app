@@ -5,6 +5,7 @@ import 'package:package_info_plus/package_info_plus.dart';
 import '../app_state.dart';
 import '../services/store_info.dart';
 import 'common.dart';
+import 'contact_screen.dart';
 import 'pin_screen.dart';
 import 'redeem_screen.dart';
 
@@ -133,6 +134,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
           subtitle: Text(accessStatusText(app)),
           trailing: const Icon(Icons.chevron_left),
           onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const RedeemScreen())),
+        ),
+        ListTile(
+          leading: const Icon(Icons.mark_email_unread_outlined),
+          title: const Text('التواصل والعروض'),
+          subtitle: const Text('رقم الهاتف وموافقتك على التحديثات والعروض'),
+          trailing: const Icon(Icons.chevron_left),
+          onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const ContactScreen())),
         ),
         ListTile(
           leading: const Icon(Icons.account_circle_outlined),

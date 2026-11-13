@@ -106,6 +106,21 @@ await seedLic('t2', { email: 't2@gmail.com', deviceId: 'A', activatedAt: days(40
 await t('بعد انتهاء النافذة يُسمح وبعدّاد جديد', () => assertSucceeds(updateDoc(doc(user('t2'), 'licenses', 't2'), { deviceId: 'B', activatedAt: serverTimestamp(), transferCount: 1, windowStart: serverTimestamp() })));
 await t('نقل ترخيص غيري مرفوض', () => assertFails(tr(user('u2'), 't2', 'Z', 2)));
 
+console.log('تفضيلات التواصل');
+const prefs = (uid, extra = {}) => ({ email: `${uid}@gmail.com`, phone: '+963933000000', marketingEmail: true, marketingWhatsapp: false, consentAt: serverTimestamp(), ...extra });
+await t('حفظ تفضيلاتي', () => assertSucceeds(setDoc(doc(user('p1'), 'users', 'p1'), prefs('p1'))));
+await t('تعديل تفضيلاتي', () => assertSucceeds(setDoc(doc(user('p1'), 'users', 'p1'), prefs('p1', { marketingEmail: false }))));
+await t('قراءة سجلي', () => assertSucceeds(getDoc(doc(user('p1'), 'users', 'p1'))));
+await t('منع قراءة سجل غيري', () => assertFails(getDoc(doc(user('p2'), 'users', 'p1'))));
+await t('منع كتابة سجل غيري', () => assertFails(setDoc(doc(user('p2'), 'users', 'p1'), prefs('p1'))));
+await t('منع سرد المستخدمين', () => assertFails(getDocs(collection(user('p1'), 'users'))));
+await t('منع بريد مزوّر', () => assertFails(setDoc(doc(user('p3'), 'users', 'p3'), prefs('p3', { email: 'other@x.com' }))));
+await t('منع حقول إضافية (مثل role)', () => assertFails(setDoc(doc(user('p3'), 'users', 'p3'), prefs('p3', { role: 'admin' }))));
+await t('منع هاتف طويل', () => assertFails(setDoc(doc(user('p3'), 'users', 'p3'), prefs('p3', { phone: '1'.repeat(40) }))));
+await t('منع موافقة غير منطقية (نص)', () => assertFails(setDoc(doc(user('p3'), 'users', 'p3'), prefs('p3', { marketingEmail: 'yes' }))));
+await t('منع تزوير وقت الموافقة', () => assertFails(setDoc(doc(user('p3'), 'users', 'p3'), prefs('p3', { consentAt: Timestamp.fromMillis(1) }))));
+await t('حذف سجلي (حق المحو)', () => assertSucceeds(deleteDoc(doc(user('p1'), 'users', 'p1'))));
+
 console.log(`\nالنتيجة: ${pass} نجح، ${fail} فشل`);
 await env.cleanup();
 process.exit(fail ? 1 : 0);

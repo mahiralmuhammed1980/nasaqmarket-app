@@ -60,6 +60,18 @@ class AppController extends ChangeNotifier {
   bool get signedIn => account != null || devBypass || _forceSignedIn;
   bool get onboarded => config != null;
 
+  /// هل سُئل المستخدم عن التواصل (يُحفظ محلياً بمعرّف الحساب؛ يُعاد السؤال لحساب آخر).
+  bool contactAsked = true;
+
+  /// تظهر شاشة التواصل مرة واحدة بعد أول دخول، ولا تظهر بلا Firebase (التطوير والاختبارات).
+  bool get needsContactPrompt => signedIn && !contactAsked && LicenseService.firebaseReady && !devBypass;
+
+  Future<void> markContactAsked() async {
+    contactAsked = true;
+    await kv.write('contact_asked', account?.email ?? '1');
+    notifyListeners();
+  }
+
   /// الوقت الفعلي: الأكبر بين ساعة الهاتف وآخر وقت شوهد (يمنع إرجاع الساعة للالتفاف).
   DateTime get effectiveNow {
     final t = _clock();
@@ -123,6 +135,7 @@ class AppController extends ChangeNotifier {
     } catch (_) {
       account = null;
     }
+    contactAsked = (await kv.read('contact_asked')) != null && (await kv.read('contact_asked')) == (account?.email ?? '1');
     pinRequired = await pin.isSet;
     unlocked = !pinRequired;
     final local = await license.local();
@@ -148,6 +161,7 @@ class AppController extends ChangeNotifier {
   /// تسجيل الدخول بـ Google (يتحقق من Drive). يرمي [AuthException].
   Future<void> signIn() async {
     account = await auth.signIn();
+    contactAsked = (await kv.read('contact_asked')) == account?.email;
     notifyListeners();
     _syncLicense();
   }

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 
 import '../app_state.dart';
+import 'contact_screen.dart';
 import 'pin_screen.dart';
 import 'setup_screen.dart';
 import 'shell.dart';
@@ -48,6 +49,7 @@ class _Gate extends StatelessWidget {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
     if (!app.signedIn) return const SignInScreen();
+    if (app.needsContactPrompt) return const ContactScreen(firstRun: true);
     if (!app.onboarded) return const SetupScreen();
     if (!app.unlocked) return const PinEntryScreen();
     return Shell(key: ValueKey(app.db));

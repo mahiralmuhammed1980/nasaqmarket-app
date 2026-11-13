@@ -7,6 +7,8 @@ import 'package:nasaq_market/core/business.dart';
 import 'package:nasaq_market/data/database.dart';
 import 'package:nasaq_market/services/kv_store.dart';
 import 'package:nasaq_market/services/license.dart';
+import 'package:nasaq_market/services/profile.dart';
+import 'package:nasaq_market/ui/contact_screen.dart';
 import 'package:nasaq_market/ui/redeem_screen.dart';
 import 'package:nasaq_market/ui/app.dart';
 
@@ -117,6 +119,72 @@ void main() {
       expect(t.widget<TextField>(find.byType(TextField)).controller!.text, 'ABCD-EFGH-JKLM-NPQR');
       expect(btn().onPressed, isNotNull);
       expect(find.textContaining('فترة مجانية حتى'), findsOneWidget);
+      await t.pumpWidget(const SizedBox());
+      await t.pump(const Duration(milliseconds: 50));
+    });
+  });
+
+  group('التواصل الاختياري', () {
+    test('تطبيع رقم الهاتف', () {
+      expect(normalizePhone(''), '');
+      expect(normalizePhone('  '), '');
+      expect(normalizePhone('0933 123 456'), '0933123456');
+      expect(normalizePhone('+963 933-123-456'), '+963933123456');
+      expect(normalizePhone('00963933123456'), '+963933123456');
+      expect(normalizePhone('٠٩٣٣١٢٣٤٥٦'), '0933123456');
+      expect(normalizePhone('123'), isNull);
+      expect(normalizePhone('1' * 20), isNull);
+    });
+
+    Future<AppController> boot(WidgetTester t, {bool first = true, Future<void> Function(ContactPrefs)? save}) async {
+      t.view.physicalSize = const Size(420, 900);
+      t.view.devicePixelRatio = 1.0;
+      addTearDown(t.view.reset);
+      final c = AppController(database: AppDatabase.memory(), kvStore: MemoryKv(), forceSignedIn: true, presetType: BusinessType.general, freeUntil: DateTime(2100));
+      await t.pumpWidget(NasaqApp(controller: c));
+      await t.runAsync(() => c.init());
+      await t.pump(const Duration(milliseconds: 200));
+      Navigator.of(t.element(find.byType(Scaffold).first)).push(MaterialPageRoute(builder: (_) => ContactScreen(firstRun: false, onSave: save)));
+      for (var i = 0; i < 3; i++) {
+        await t.runAsync(() => Future.delayed(const Duration(milliseconds: 120)));
+        await t.pump(const Duration(milliseconds: 350));
+      }
+      return c;
+    }
+
+    testWidgets('الخانات غير مفعّلة افتراضياً والحفظ يرسل ما اختاره المستخدم فقط', (t) async {
+      ContactPrefs? saved;
+      final c = await boot(t, save: (p) async => saved = p);
+      final boxes = t.widgetList<CheckboxListTile>(find.byType(CheckboxListTile)).toList();
+      expect(boxes.length, 2);
+      expect(boxes.every((b) => b.value == false), isTrue);
+      await t.enterText(find.byType(TextFormField), '0933 123 456');
+      await t.tap(find.byType(CheckboxListTile).first);
+      await t.pump();
+      await t.tap(find.text('حفظ'));
+      await t.runAsync(() => Future.delayed(const Duration(milliseconds: 100)));
+      await t.pump(const Duration(milliseconds: 300));
+      expect(saved!.phone, '0933123456');
+      expect(saved!.marketingEmail, isTrue);
+      expect(saved!.marketingWhatsapp, isFalse);
+      expect(c.contactAsked, isTrue);
+      await t.pumpWidget(const SizedBox());
+      await t.pump(const Duration(milliseconds: 50));
+    });
+
+    testWidgets('واتساب بلا رقم يُرفض، والرقم الخاطئ يُرفض، ولا يُحفظ شيء', (t) async {
+      var calls = 0;
+      await boot(t, save: (p) async => calls++);
+      await t.tap(find.byType(CheckboxListTile).last);
+      await t.pump();
+      await t.tap(find.text('حفظ'));
+      await t.pump(const Duration(milliseconds: 300));
+      expect(find.text('أدخل رقم الهاتف لنراسلك على واتساب'), findsOneWidget);
+      await t.enterText(find.byType(TextFormField), '12');
+      await t.tap(find.text('حفظ'));
+      await t.pump(const Duration(milliseconds: 300));
+      expect(find.textContaining('غير صالح'), findsOneWidget);
+      expect(calls, 0);
       await t.pumpWidget(const SizedBox());
       await t.pump(const Duration(milliseconds: 50));
     });
