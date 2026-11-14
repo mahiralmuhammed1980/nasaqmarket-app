@@ -6,6 +6,7 @@ import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nasaq_market/data/database.dart';
 import 'package:nasaq_market/data/repository.dart';
+import 'package:googleapis/drive/v3.dart' as drive;
 import 'package:nasaq_market/services/backup.dart';
 import 'package:nasaq_market/services/invoice_pdf.dart';
 import 'package:nasaq_market/services/kv_store.dart';
@@ -142,6 +143,19 @@ void main() {
       Directory('build').createSync();
       File('build/sample_invoice.pdf').writeAsBytesSync(bytes);
       await db.close();
+    });
+  });
+
+  group('رسائل خطأ Drive', () {
+    test('Drive API غير مفعّلة تُشرح للمطوّر', () {
+      final e = drive.DetailedApiRequestError(403, 'Google Drive API has not been used in project 1 before or it is disabled.');
+      expect(driveErrorMessage(e), contains('غير مفعّلة'));
+      expect(driveErrorMessage(e), contains('403'));
+    });
+    test('401 و403 العاديان وغير الشبكة', () {
+      expect(driveErrorMessage(drive.DetailedApiRequestError(401, 'x')), contains('أعد تسجيل الدخول'));
+      expect(driveErrorMessage(drive.DetailedApiRequestError(403, 'forbidden')), contains('رُفض'));
+      expect(driveErrorMessage(Exception('SocketException')), contains('الاتصال بالإنترنت'));
     });
   });
 }

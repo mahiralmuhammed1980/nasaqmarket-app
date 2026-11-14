@@ -91,6 +91,22 @@ class _AuthClient extends http.BaseClient {
       _inner.send(request..headers.addAll(headers));
 }
 
+/// رسالة عربية واضحة لفشل الوصول إلى Drive، مع ذكر السبب الفعلي لتسهيل التشخيص.
+String driveErrorMessage(Object e) {
+  final raw = e.toString();
+  if (e is drive.DetailedApiRequestError) {
+    final reason = e.errors.isNotEmpty ? (e.errors.first.reason ?? '') : '';
+    if (e.status == 403 && (reason == 'accessNotConfigured' || raw.contains('has not been used') || raw.contains('disabled'))) {
+      return 'واجهة Google Drive API غير مفعّلة في مشروع التطبيق (خطأ إعداد من المطوّر). [403 $reason]';
+    }
+    if (e.status == 401) return 'انتهت صلاحية إذن Drive. أعد تسجيل الدخول ثم امنح الإذن. [401]';
+    if (e.status == 403) return 'رُفض الوصول إلى Drive لهذا الحساب. [403 $reason]';
+    return 'تعذّر الوصول إلى Google Drive. [${e.status} $reason]';
+  }
+  final short = raw.length > 80 ? raw.substring(0, 80) : raw;
+  return 'تعذّر الوصول إلى Google Drive. تأكد من الاتصال بالإنترنت ومن منح الإذن. [$short]';
+}
+
 const kGoogleServerClientId = String.fromEnvironment('GOOGLE_SERVER_CLIENT_ID');
 
 Future<void>? _googleInit;
@@ -124,8 +140,8 @@ class DriveBackupService {
     final api = await _api(interactive: true);
     try {
       await api.files.list(spaces: 'appDataFolder', pageSize: 1, $fields: 'files(id)');
-    } catch (_) {
-      throw BackupException('تعذّر الوصول إلى Google Drive لهذا الحساب. تأكد من الاتصال بالإنترنت ومن منح الإذن.');
+    } catch (e) {
+      throw BackupException(driveErrorMessage(e));
     }
   }
 
