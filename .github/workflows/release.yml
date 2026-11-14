@@ -68,9 +68,14 @@ jobs:
       - name: تشخيص تسجيل Google (لا يطبع أسراراً)
         env:
           WEB_ID: ${{ secrets.GOOGLE_SERVER_CLIENT_ID }}
+          KS_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
         run: |
-          echo "== بصمة توقيع الـ APK (يجب أن تطابق SHA-1 المضافة في Firebase) =="
-          keytool -printcert -jarfile nasaq_market.apk | grep -E "SHA1|SHA256|Owner" || true
+          echo "== بصمة توقيع الـ APK الفعلية (يجب أن تطابق SHA-1 في Firebase: 12:79:7E:BA:...:2A:7E) =="
+          AS=$(ls -d "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)
+          "$AS" verify --print-certs nasaq_market.apk 2>&1 | grep -E "certificate (SHA-1|SHA-256) digest|Verifies" || echo "تعذّر قراءة التوقيع"
+          echo "== بصمة المفتاح المخزَّن في الأسرار =="
+          keytool -list -v -keystore android/app/release.jks -alias "$KEY_ALIAS" -storepass "$KS_PASS" 2>&1 | grep -E "SHA1:|SHA256:|Alias name" || echo "تعذّر فتح المفتاح (كلمة المرور أو الاسم المستعار خطأ؟)"
           echo "== معرّف Web =="
           echo "طوله: ${#WEB_ID}"
           echo "رقم المشروع (يجب أن يكون 9476925350): ${WEB_ID%%-*}"
