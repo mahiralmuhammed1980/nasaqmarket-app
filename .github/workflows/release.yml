@@ -74,6 +74,9 @@ jobs:
           echo "== معرّف Web =="
           echo "طوله: ${#WEB_ID}"
           echo "رقم المشروع (يجب أن يكون 9476925350): ${WEB_ID%%-*}"
+          PFX="${WEB_ID#*-}"; PFX="${PFX:0:8}"
+          echo "بداية الجزء الثاني: $PFX"
+          case "$PFX" in 3qu516t0) echo "صحيح: هذا معرّف Web";; mm6deahg) echo "خطأ: هذا معرّف Android، المطلوب معرّف Web (3qu516t0...)";; *) echo "غير معروف: قارنه بمعرّف Web في Google Cloud";; esac
           case "$WEB_ID" in *.apps.googleusercontent.com) echo "النهاية صحيحة";; *) echo "تحذير: لا ينتهي بـ .apps.googleusercontent.com";; esac
           case "$WEB_ID" in *" "*|*$'\n'*) echo "تحذير: فيه مسافة أو سطر جديد";; *) echo "بلا مسافات";; esac
 
