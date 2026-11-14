@@ -65,6 +65,18 @@ jobs:
           flutter build appbundle --release $DEFS
           cp build/app/outputs/flutter-apk/app-release.apk nasaq_market.apk
 
+      - name: تشخيص تسجيل Google (لا يطبع أسراراً)
+        env:
+          WEB_ID: ${{ secrets.GOOGLE_SERVER_CLIENT_ID }}
+        run: |
+          echo "== بصمة توقيع الـ APK (يجب أن تطابق SHA-1 المضافة في Firebase) =="
+          keytool -printcert -jarfile nasaq_market.apk | grep -E "SHA1|SHA256|Owner" || true
+          echo "== معرّف Web =="
+          echo "طوله: ${#WEB_ID}"
+          echo "رقم المشروع (يجب أن يكون 9476925350): ${WEB_ID%%-*}"
+          case "$WEB_ID" in *.apps.googleusercontent.com) echo "النهاية صحيحة";; *) echo "تحذير: لا ينتهي بـ .apps.googleusercontent.com";; esac
+          case "$WEB_ID" in *" "*|*$'\n'*) echo "تحذير: فيه مسافة أو سطر جديد";; *) echo "بلا مسافات";; esac
+
       - name: ملف الإصدار (version.json)
         run: python3 tool/make_version_json.py nasaq_market.apk "${{ github.repository }}" version.json "$(git log -1 --pretty=%s)"
 
