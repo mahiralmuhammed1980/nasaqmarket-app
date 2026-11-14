@@ -78,6 +78,9 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.ver.outputs.tag }}
+          # الوسم الجديد يُنشأ على الـ commit الذي بُني منه الـ APK (وليس على آخر commit في main)
+          target_commitish: ${{ github.sha }}
+          fail_on_unmatched_files: true
           name: نسق ماركت ${{ steps.ver.outputs.tag }}
           files: |
             nasaq_market.apk
