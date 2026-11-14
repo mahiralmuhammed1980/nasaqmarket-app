@@ -28,25 +28,38 @@ class _SetupScreenState extends State<SetupScreen> {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-        appBar: AppBar(title: const Text('إعداد المحل')),
-        body: Centered(
-          maxWidth: 560,
-          child: ListView(padding: const EdgeInsets.all(16), children: [
-            Text('ما نوع نشاطك؟', style: Theme.of(context).textTheme.titleLarge),
+    appBar: AppBar(title: const Text('إعداد المحل')),
+    body: Centered(
+      maxWidth: 560,
+      child: SafeArea(
+        top: false,
+        child: ListView(
+          padding: const EdgeInsets.all(16),
+          children: [
+            Text(
+              'ما نوع نشاطك؟',
+              style: Theme.of(context).textTheme.titleLarge,
+            ),
             const SizedBox(height: 4),
-            const Text('نضبط التطبيق حسب نوع المحل، ويمكنك تغيير الخيارات لاحقاً من الإعدادات.'),
+            const Text(
+              'نضبط التطبيق حسب نوع المحل، ويمكنك تغيير الخيارات لاحقاً من الإعدادات.',
+            ),
             const SizedBox(height: 12),
             for (final t in BusinessType.values)
               Card(
-                color: _type == t ? Theme.of(context).colorScheme.primaryContainer : null,
+                color: _type == t
+                    ? Theme.of(context).colorScheme.primaryContainer
+                    : null,
                 child: ListTile(
                   leading: Icon(t.icon),
                   title: Text(t.label),
-                  subtitle: Text([
-                    if (t.variants) 'مقاس ولون',
-                    if (t.decimal) 'بيع بالوزن',
-                    if (t.expiry) 'تاريخ صلاحية',
-                  ].join(' • ')),
+                  subtitle: Text(
+                    [
+                      if (t.variants) 'مقاس ولون',
+                      if (t.decimal) 'بيع بالوزن',
+                      if (t.expiry) 'تاريخ صلاحية',
+                    ].join(' • '),
+                  ),
                   trailing: _type == t ? const Icon(Icons.check_circle) : null,
                   onTap: () => setState(() => _type = t),
                 ),
@@ -57,10 +70,14 @@ class _SetupScreenState extends State<SetupScreen> {
             const SizedBox(height: 12),
             FilledButton(
               onPressed: _saving ? null : _done,
-              style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+              style: FilledButton.styleFrom(
+                minimumSize: const Size.fromHeight(48),
+              ),
               child: const Text('ابدأ'),
             ),
-          ]),
+          ],
         ),
-      );
+      ),
+    ),
+  );
 }

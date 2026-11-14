@@ -25,15 +25,18 @@ class _ContactScreenState extends State<ContactScreen> {
   void initState() {
     super.initState();
     if (!widget.firstRun && widget.onSave == null) {
-      ProfileService().load().then((p) {
-        if (p != null && mounted) {
-          setState(() {
-            _phone.text = p.phone;
-            _email = p.marketingEmail;
-            _wa = p.marketingWhatsapp;
-          });
-        }
-      }).catchError((_) {});
+      ProfileService()
+          .load()
+          .then((p) {
+            if (p != null && mounted) {
+              setState(() {
+                _phone.text = p.phone;
+                _email = p.marketingEmail;
+                _wa = p.marketingWhatsapp;
+              });
+            }
+          })
+          .catchError((_) {});
     }
   }
 
@@ -54,12 +57,20 @@ class _ContactScreenState extends State<ContactScreen> {
       _error = null;
     });
     try {
-      final prefs = ContactPrefs(phone: phone, marketingEmail: _email, marketingWhatsapp: _wa);
+      final prefs = ContactPrefs(
+        phone: phone,
+        marketingEmail: _email,
+        marketingWhatsapp: _wa,
+      );
       await (widget.onSave ?? ProfileService().save)(prefs);
       await app.markContactAsked();
       if (!widget.firstRun && mounted) nav.pop();
     } catch (_) {
-      if (mounted) setState(() => _error = 'تعذّر الحفظ. تأكد من الاتصال بالإنترنت أو اضغط «تخطّي».');
+      if (mounted)
+        setState(
+          () => _error =
+              'تعذّر الحفظ. تأكد من الاتصال بالإنترنت أو اضغط «تخطّي».',
+        );
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -67,13 +78,26 @@ class _ContactScreenState extends State<ContactScreen> {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-        appBar: AppBar(title: Text(widget.firstRun ? 'ابقَ على اطّلاع' : 'التواصل والعروض'), automaticallyImplyLeading: !widget.firstRun),
-        body: Centered(
-          maxWidth: 520,
-          child: ListView(padding: const EdgeInsets.all(16), children: [
-            const Text('كل ما في هذه الشاشة اختياري ولا يؤثر على استخدامك للتطبيق. نستعمل بياناتك فقط لإرسال التحديثات والعروض إن وافقت، ويمكنك تغيير اختيارك أو طلب حذف بياناتك في أي وقت.'),
+    appBar: AppBar(
+      title: Text(widget.firstRun ? 'ابقَ على اطّلاع' : 'التواصل والعروض'),
+      automaticallyImplyLeading: !widget.firstRun,
+    ),
+    body: Centered(
+      maxWidth: 520,
+      child: SafeArea(
+        top: false,
+        child: ListView(
+          padding: const EdgeInsets.all(16),
+          children: [
+            const Text(
+              'كل ما في هذه الشاشة اختياري ولا يؤثر على استخدامك للتطبيق. نستعمل بياناتك فقط لإرسال التحديثات والعروض إن وافقت، ويمكنك تغيير اختيارك أو طلب حذف بياناتك في أي وقت.',
+            ),
             const SizedBox(height: 12),
-            formField('رقم الهاتف / واتساب (اختياري)', _phone, type: TextInputType.phone),
+            formField(
+              'رقم الهاتف / واتساب (اختياري)',
+              _phone,
+              type: TextInputType.phone,
+            ),
             CheckboxListTile(
               contentPadding: EdgeInsets.zero,
               value: _email,
@@ -89,20 +113,29 @@ class _ContactScreenState extends State<ContactScreen> {
             if (_error != null)
               Padding(
                 padding: const EdgeInsets.only(top: 8),
-                child: Text(_error!, style: TextStyle(color: Theme.of(context).colorScheme.error)),
+                child: Text(
+                  _error!,
+                  style: TextStyle(color: Theme.of(context).colorScheme.error),
+                ),
               ),
             const SizedBox(height: 12),
             FilledButton(
               onPressed: _busy ? null : _save,
-              style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+              style: FilledButton.styleFrom(
+                minimumSize: const Size.fromHeight(48),
+              ),
               child: const Text('حفظ'),
             ),
             if (widget.firstRun)
               TextButton(
-                onPressed: _busy ? null : () => context.appRead.markContactAsked(),
+                onPressed: _busy
+                    ? null
+                    : () => context.appRead.markContactAsked(),
                 child: const Text('تخطّي'),
               ),
-          ]),
+          ],
         ),
-      );
+      ),
+    ),
+  );
 }
