@@ -1,8 +1,13 @@
-name: Release AAB
-# يُشغَّل يدوياً (Run workflow). يبني حزمة AAB موقّعة بمفتاح الرفع (Upload key) لرفعها إلى Google Play Console.
-# التحديث للمستخدمين يتم عبر Google Play، فلا حاجة لـ APK أو version.json.
+name: Release APK
+# يُشغَّل يدوياً (Actions ← Release APK ← Run workflow).
+# الوسم يُشتق من version في pubspec.yaml: 1.0.0+1 ← v1.0.0-1 (ارفع الرقم بعد + عند كل إصدار).
+# ينشر على Releases: nasaq_market.apk (للمندوبين والزبائن) و version.json (يقرؤه التحديث الداخلي).
+# يبني أيضاً AAB كملف مرفق (للانتقال لاحقاً إلى Google Play).
 on:
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -50,14 +55,33 @@ jobs:
       - run: flutter analyze --no-fatal-infos
       - run: flutter test
 
-      - name: بناء AAB
+      - name: بناء APK و AAB
         env:
           GOOGLE_SERVER_CLIENT_ID: ${{ secrets.GOOGLE_SERVER_CLIENT_ID }}
           LICENSE_SECRET: ${{ secrets.LICENSE_SECRET }}
         run: |
-          flutter build appbundle --release \
-            --dart-define=GOOGLE_SERVER_CLIENT_ID="$GOOGLE_SERVER_CLIENT_ID" \
-            --dart-define=LICENSE_SECRET="$LICENSE_SECRET"
+          DEFS="--dart-define=GOOGLE_SERVER_CLIENT_ID=$GOOGLE_SERVER_CLIENT_ID --dart-define=LICENSE_SECRET=$LICENSE_SECRET --dart-define=UPDATE_URL=https://github.com/${{ github.repository }}/releases/latest/download/version.json"
+          flutter build apk --release $DEFS
+          flutter build appbundle --release $DEFS
+          cp build/app/outputs/flutter-apk/app-release.apk nasaq_market.apk
+
+      - name: ملف الإصدار (version.json)
+        run: python3 tool/make_version_json.py nasaq_market.apk "${{ github.repository }}" version.json "$(git log -1 --pretty=%s)"
+
+      - name: قراءة الإصدار
+        id: ver
+        run: |
+          V=$(grep -E '^version:' pubspec.yaml | awk '{print $2}')
+          echo "tag=v${V/+/-}" >> "$GITHUB_OUTPUT"
+
+      - name: نشر الإصدار
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name: نسق ماركت ${{ steps.ver.outputs.tag }}
+          files: |
+            nasaq_market.apk
+            version.json
 
       - uses: actions/upload-artifact@v4
         with:

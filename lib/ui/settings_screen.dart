@@ -8,6 +8,8 @@ import 'common.dart';
 import 'contact_screen.dart';
 import 'pin_screen.dart';
 import 'redeem_screen.dart';
+import 'shell.dart';
+import '../services/updater.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -146,6 +148,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
           leading: const Icon(Icons.account_circle_outlined),
           title: const Text('حساب Google'),
           subtitle: Text(app.account?.email ?? '—'),
+        ),
+        ListTile(
+          leading: const Icon(Icons.system_update),
+          title: const Text('التحقق من وجود تحديث'),
+          onTap: () async {
+            try {
+              final u = await UpdateService().check(throwOnError: true);
+              if (!context.mounted) return;
+              if (u == null) {
+                snack(context, 'أنت تستخدم أحدث إصدار');
+              } else {
+                showUpdateDialog(context, u);
+              }
+            } catch (_) {
+              if (context.mounted) snack(context, 'تعذّر التحقق. تأكد من الاتصال بالإنترنت.', error: true);
+            }
+          },
         ),
         ListTile(
           leading: const Icon(Icons.logout),

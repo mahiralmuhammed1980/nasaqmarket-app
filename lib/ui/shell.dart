@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../app_state.dart';
 import '../core/format.dart';
+import '../services/updater.dart';
 import 'common.dart';
 import 'dashboard_screen.dart';
 import 'cash_screen.dart';
@@ -41,6 +42,7 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _checkUpdate());
   }
 
   @override
@@ -58,6 +60,12 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
       if (DateTime.now().difference(_pausedAt!) > const Duration(minutes: 1)) context.app.lock();
       _pausedAt = null;
     }
+  }
+
+  Future<void> _checkUpdate() async {
+    final info = await UpdateService().check();
+    if (info == null || !mounted) return;
+    showUpdateDialog(context, info);
   }
 
   @override
@@ -158,4 +166,56 @@ class _AccessBanner extends StatelessWidget {
       action: soon ? 'أدخل كود' : null,
     );
   }
+}
+
+Future<void> showUpdateDialog(BuildContext context, UpdateInfo info) async {
+  final go = await showDialog<bool>(
+    context: context,
+    barrierDismissible: !info.mandatory,
+    builder: (ctx) => AlertDialog(
+      title: Text('تحديث جديد ${info.versionName}'),
+      content: Text(info.notes.isEmpty ? 'يتوفر إصدار أحدث من التطبيق.' : info.notes),
+      actions: [
+        if (!info.mandatory) TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('لاحقاً')),
+        FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('تحديث الآن')),
+      ],
+    ),
+  );
+  if (go != true || !context.mounted) return;
+  // نسخة أمان قبل التحديث. بياناتك تبقى كما هي بعد التثبيت.
+  await context.app.safetyBackup('before_update');
+  if (!context.mounted) return;
+  showDialog(
+    context: context,
+    barrierDismissible: false,
+    builder: (ctx) => _UpdateProgress(info),
+  );
+}
+
+class _UpdateProgress extends StatelessWidget {
+  final UpdateInfo info;
+  const _UpdateProgress(this.info);
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+        title: const Text('جارٍ التحديث'),
+        content: StreamBuilder(
+          stream: UpdateService().install(info),
+          builder: (ctx, snap) {
+            final e = snap.data;
+            if (snap.hasError) return Text('فشل التحديث: ${snap.error}');
+            if (e == null) return const LinearProgressIndicator();
+            final status = e.status.name;
+            if (status.contains('ERROR') || status.contains('CHECKSUM') || status.contains('PERMISSION') || status.contains('INTERNAL') || status.contains('ALREADY')) {
+              return Text('تعذّر التحديث ($status). تأكد من السماح بتثبيت التطبيقات من هذا المصدر.');
+            }
+            final p = int.tryParse(e.value ?? '');
+            return Column(mainAxisSize: MainAxisSize.min, children: [
+              LinearProgressIndicator(value: p == null ? null : p / 100),
+              const SizedBox(height: 8),
+              Text(status.contains('INSTALLING') ? 'جارٍ التثبيت...' : 'جارٍ التنزيل ${p ?? ''}%'),
+            ]);
+          },
+        ),
+        actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('إغلاق'))],
+      );
 }
